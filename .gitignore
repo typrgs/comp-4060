@@ -1,3 +1,4 @@
 Core/**
 E51-pack/**
 .vscode/
+*.o
