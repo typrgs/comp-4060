@@ -2,7 +2,7 @@
 #define _MY_COMMON_H
 
 #include "sam.h"
-#include <same51j20a.h>
+#include <same51j20a.h> // added to make VS Code happy
 #include <stdint.h>
 #include <assert.h>
 #include <stddef.h>
