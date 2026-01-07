@@ -16,7 +16,7 @@ ASFLAGS=-mthumb -mcpu=$(CPU) -D__$(DEVICE_UPPER)__ -O0 -ffunction-sections -Wall
 CFLAGS=-x c -mthumb -mcpu=$(CPU) -D__$(DEVICE_UPPER)__ -O0 -ffunction-sections -Wall -c -std=gnu99
 LDFLAGS=-Wl,--start-group -Wl,--end-group -Wl,--gc-sections -mthumb -mcpu=$(CPU) -T../../../$(PACK)/gcc/gcc/$(DEVICE)_flash.ld 
 
-SYS_OBJS=../../../$(PACK)/gcc/gcc/startup_$(DEVICE).o ../../logger.o
+SYS_OBJS=../../../$(PACK)/gcc/gcc/startup_$(DEVICE).o
 
 HDRS = $(wildcard *.h) $(wildcard ../include/*.h)
 SRCS = $(wildcard *.c)
