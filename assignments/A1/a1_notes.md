@@ -118,7 +118,7 @@ configuration (in order):
 
 2. use SERCOM0, corresponds to port 2 (click 2)
   - needs main clock - APBA
-  - needs pin muxing
+  - needs pin muxing PA 8 and 9
 
 3. interrupts for RX, if we have a buffer and callback
   - size passed doesn't include the CRC or stuff bytes (from user POV)
@@ -143,7 +143,7 @@ configuration (in order):
   - setting baud rate to 0 simplifies to gclk freq / 16
     - so if gclk freq = 32, then we get 2 megabit/sec communications
 
-note: using ->USART_INT.xxx (datasheet section 34)
+note: using ->USART_INT.xxx (datasheet section 34), to select USART internal clock mode
 
 
 to RX:
