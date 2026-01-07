@@ -9,7 +9,7 @@
   is then up to the transmitter to wait for a response and act accordingly based on what it sees on the bus.
   This is also why a timeout is required; so the transmitter can react to the receiver staying quiet due to tx errors.
 
-  This unit configures and uses generic clock TBD by you
+  This unit configures and uses generic clock 2
 */
 
 typedef void(*uart485Callback)(void);
