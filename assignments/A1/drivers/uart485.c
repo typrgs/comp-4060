@@ -14,8 +14,44 @@
 #define CRC_INIT_SEED 0xFFFFFFFF
 
 uint8_t *asyncBuf = NULL;
+uint8_t asyncBufPos = 0;
 uart485Callback asyncDone = NULL;
 uint8_t asyncSize = 0;
+
+typedef enum RX_RESULT
+{
+  NONE,
+  VALID,
+  INVALID,
+  NUM_RESULTS
+} RxResult;
+
+RxResult asyncProcessResult = NONE;
+
+typedef enum RX_STATE
+{
+  IDLE,
+  SEARCH,
+  START,
+  STUFF,
+  DATA,
+  END,
+  NUM_STATES
+} RxState;
+
+RxState rxCurrState = IDLE;
+
+// state function prototypes
+RxState rxIdle(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize);
+RxState rxSearch(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t asyncSize);
+RxState rxStart(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize);
+RxState rxStuff(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize);
+RxState rxData(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize);
+RxState rxEnd(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize);
+
+// state function array
+RxState (*rxStates[NUM_STATES])(uint8_t, uint8_t *, uint8_t *, uint8_t) = {rxIdle, rxSearch, rxStart, rxStuff, rxData, rxEnd};
+
 
 void uart485Init(uint8_t *data, uint8_t expectedSize, uart485Callback done)
 {
@@ -75,30 +111,14 @@ void uart485Init(uint8_t *data, uint8_t expectedSize, uart485Callback done)
   while((SERCOM0_REGS->USART_INT.SERCOM_SYNCBUSY & SERCOM_USART_INT_SYNCBUSY_ENABLE_Msk) == SERCOM_USART_INT_SYNCBUSY_ENABLE_Msk);
 }
 
-void SERCOM0_2_Handler()
-{
-  // clear interrupt flag
-  SERCOM0_REGS->USART_INT.SERCOM_INTFLAG = SERCOM_USART_INT_INTFLAG_RXC_Msk;
-
-  // read in data 
-
-  // process RX state machine
-
-  // clear status register
-  SERCOM0_REGS->USART_INT.SERCOM_STATUS = 0xFF;
-
-  // if full packet received, invoke callback handler
-  asyncDone();
-}
-
-static void DMAC_CRC_Init()
+static void crcInit()
 {
   DMAC_REGS->DMAC_CRCCTRL = DMAC_CRCCTRL_RESETVALUE;
   DMAC_REGS->DMAC_CRCCHKSUM = CRC_INIT_SEED;
   DMAC_REGS->DMAC_CRCCTRL = DMAC_CRCCTRL_CRCSRC_IO;
 }
 
-static void DMAC_CRC_NextByte(uint8_t next)
+static void crcNextByte(uint8_t next)
 {
   DMAC_REGS->DMAC_CRCDATAIN = next;
   
@@ -107,7 +127,7 @@ static void DMAC_CRC_NextByte(uint8_t next)
   DMAC_REGS->DMAC_CRCSTATUS = DMAC_CRCSTATUS_CRCBUSY_Msk;
 }
 
-static uint16_t DMAC_CRC_Result()
+static uint16_t crcResult()
 {
   return (uint16_t)DMAC_REGS->DMAC_CRCCHKSUM;
 }
@@ -137,7 +157,7 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
   while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_DRE_Msk) == 0);
 
   // setup CRC computation
-  DMAC_CRC_Init();
+  crcInit();
 
   // transmit frame start byte sequence
   SERCOM0_REGS->USART_INT.SERCOM_DATA = SENTINEL;
@@ -157,7 +177,7 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
     }
 
     SERCOM0_REGS->USART_INT.SERCOM_DATA = bytes[i];
-    DMAC_CRC_NextByte(bytes[i]);
+    crcNextByte(bytes[i]);
     while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
   }
 
@@ -167,13 +187,13 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
     for(uint16_t i=0; i<(PROTOCOL_PACKET_SIZE - size); i++)
     {
       SERCOM0_REGS->USART_INT.SERCOM_DATA = 0;
-      DMAC_CRC_NextByte(0);
+      crcNextByte(0);
       while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
     }
   }
 
   // transmit CRC
-  uint16_t crc = DMAC_CRC_Result();
+  uint16_t crc = crcResult();
 
   SERCOM0_REGS->USART_INT.SERCOM_DATA = crc >> 8;
   while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
@@ -193,11 +213,200 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
   PORT_REGS->GROUP[1].PORT_OUTCLR = RE_PIN;
 }
 
+/*************** RX State Machine ******************/
+
+RxState rxIdle(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
+{
+  RxState nextState = IDLE;
+
+  if(nextByte == SENTINEL)
+  {
+    nextState = SEARCH;
+  }
+
+  return nextState;
+}
+
+RxState rxSearch(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
+{
+  RxState nextState = IDLE;
+
+  if(nextByte == FRAME_START)
+  {
+    nextState = START;
+  }
+  else if(nextByte == SENTINEL)
+  {
+    nextState = SEARCH;
+  }
+
+  return nextState;
+}
+
+RxState rxStart(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
+{
+  RxState nextState = DATA;
+
+  if(nextByte == SENTINEL)
+  {
+    nextState = STUFF;
+  }
+  else
+  {
+    buf[(*bufPos)++] = nextByte;
+
+    if((*bufPos) > expectedSize)
+    {
+      nextState = IDLE;
+    }
+  }
+
+  return nextState;
+}
+
+RxState rxStuff(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
+{
+  RxState nextState = DATA;
+
+  if(nextByte == FRAME_START)
+  {
+    nextState = START;
+  }
+  else if(nextByte == FRAME_END)
+  {
+    nextState = END;
+  }
+  else if(nextByte == SENTINEL)
+  {
+    buf[(*bufPos)++] = nextByte;
+  
+    if((*bufPos) > expectedSize)
+    {
+      nextState = IDLE;
+    }
+  }
+  else
+  {
+    nextState = IDLE;
+  }
+
+  return nextState;
+}
+
+RxState rxData(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
+{
+  RxState nextState = DATA;
+
+  if(nextByte == SENTINEL)
+  {
+    nextState = STUFF;
+  }
+  else
+  {
+    buf[(*bufPos)++] = nextByte;
+
+    if((*bufPos) > expectedSize)
+    {
+      nextState = IDLE;
+    }
+  }
+
+  return nextState;
+}
+
+RxState rxEnd(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
+{
+  RxState nextState = IDLE;
+
+  if(nextByte == SENTINEL)
+  {
+    nextState = SEARCH;
+  }
+
+  return nextState;
+}
+
+RxResult rxProcessState(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
+{
+  RxResult result = NONE;
+  RxState nextState = rxStates[rxCurrState](nextByte, buf, bufPos, expectedSize);
+
+  // verify the result of processing the state machine
+  if(nextState == IDLE && (rxCurrState == START || rxCurrState == STUFF || rxCurrState == DATA))
+  {
+    result = INVALID;
+  }
+  else if(nextState == IDLE && rxCurrState == END)
+  {
+    result = VALID;
+  }
+
+  // update current state
+  rxCurrState = nextState;
+
+  return result;
+}
+
+void SERCOM0_2_Handler()
+{
+  // clear interrupt flag
+  SERCOM0_REGS->USART_INT.SERCOM_INTFLAG = SERCOM_USART_INT_INTFLAG_RXC_Msk;
+
+  // read in data
+  uint8_t nextByte = (uint8_t)SERCOM0_REGS->USART_INT.SERCOM_DATA;
+
+  // process RX state machine
+  asyncProcessResult = rxProcessState(nextByte, asyncBuf, &asyncBufPos, asyncSize);
+
+  // clear status register
+  SERCOM0_REGS->USART_INT.SERCOM_STATUS = 0xFF;
+
+  // if full packet received, invoke callback handler
+  if(asyncProcessResult == VALID)
+  {
+    asyncDone();
+    asyncBufPos = 0; // reset buffer position for next message
+  }
+}
+
 bool uart485ReceiveBytes(uint8_t * const bytes, uint16_t size, uint16_t timeoutMS)
 {
   bool result = false;
-
   
+  RxResult processResult = NONE;
+  uint8_t bytesPos = 0;
+  
+  while(processResult == NONE)
+  {
+    uint32_t currTime = elapsedMS();
+    uint32_t endTime = currTime + (uint32_t)timeoutMS;
+
+    while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_RXC_Msk) == 0 && (timeoutMS == 0 || endTime > currTime))
+    {
+      currTime = elapsedMS();
+    }
+  
+    if(timeoutMS > 0 && currTime >= endTime)
+    {
+      processResult = INVALID;
+    }
+    else
+    {
+      // read data
+      uint8_t nextByte = (uint8_t)SERCOM0_REGS->USART_INT.SERCOM_DATA;
+      
+      // pass data to state machine and process
+      processResult = rxProcessState(nextByte, bytes, &bytesPos, size);
+
+      // clear status register
+      SERCOM0_REGS->USART_INT.SERCOM_STATUS = 0xFF;
+    }
+  }
+
+  if(processResult == VALID)
+  {
+    result = true;
+  }
 
   return result;
 }
