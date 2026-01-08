@@ -124,7 +124,7 @@ configuration (in order):
   - size passed doesn't include the CRC or stuff bytes (from user POV)
   - data link layer has to deal with navigating around the CRC and stuff bytes to give the actual data to the application layer
 
-  - uses SERCOM_2_Handler(), SERCOM_2_IRQN
+  - uses SERCOM0_2_Handler(), SERCOM0_2_IRQN
 
 4. setup the UART for TX and RX (CTRLB register)
   - set RXEN and TXEN
