@@ -105,12 +105,12 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
     }
   }
 
-  // spin on "data register empty" flag
-  while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_DRE_Msk == 0);
-
   // set RS-485 GPIO pins to enter transmit mode
   PORT_REGS->GROUP[1].PORT_OUTSET = DE_PIN;
   PORT_REGS->GROUP[1].PORT_OUTSET = RE_PIN;
+
+  // spin on "data register empty" flag
+  while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_DRE_Msk == 0);
 
   // transmit frame start byte sequence
   SERCOM0_REGS->USART_INT.SERCOM_DATA = SENTINEL;
