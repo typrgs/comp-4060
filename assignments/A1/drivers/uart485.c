@@ -67,16 +67,16 @@ void uart485Init(uint8_t *data, uint8_t expectedSize, uart485Callback done)
 
   // mux RX and TX pins for SERCOM0
   // PA8 corresponds to pad 0, PA9 corresponds to pad 1
-  PORT_REGS->GROUP[0].PORT_PMUX[4] = PORT_PMUX_PMUXE_C;
-  PORT_REGS->GROUP[0].PORT_PMUX[4] = PORT_PMUX_PMUXO_C;
+  PORT_REGS->GROUP[0].PORT_PMUX[4] |= PORT_PMUX_PMUXE_C;
+  PORT_REGS->GROUP[0].PORT_PMUX[4] |= PORT_PMUX_PMUXO_C;
   PORT_REGS->GROUP[0].PORT_PINCFG[8] = PORT_PINCFG_PMUXEN_Msk;
   PORT_REGS->GROUP[0].PORT_PINCFG[9] = PORT_PINCFG_PMUXEN_Msk;
 
   // setup RS-485 GPIO pins for switching between RX and TX mode
-  PORT_REGS->GROUP[1].PORT_DIRSET = DE_PIN;
   PORT_REGS->GROUP[1].PORT_DIRSET = RE_PIN;
-  PORT_REGS->GROUP[1].PORT_OUTCLR = DE_PIN;
+  PORT_REGS->GROUP[1].PORT_DIRSET = DE_PIN;
   PORT_REGS->GROUP[1].PORT_OUTCLR = RE_PIN;
+  PORT_REGS->GROUP[1].PORT_OUTCLR = DE_PIN;
 
   // if parameters are passed for async receive
   if(data != NULL && expectedSize > 0 && done != NULL)
@@ -93,23 +93,23 @@ void uart485Init(uint8_t *data, uint8_t expectedSize, uart485Callback done)
   }
 
   // enable RX and TX
-  SERCOM0_REGS->USART_INT.SERCOM_CTRLB = SERCOM_USART_INT_CTRLB_RXEN_Msk | SERCOM_USART_INT_CTRLB_TXEN_Msk; 
+  SERCOM0_REGS->USART_INT.SERCOM_CTRLB |= SERCOM_USART_INT_CTRLB_RXEN_Msk | SERCOM_USART_INT_CTRLB_TXEN_Msk; 
 
   // set mode, cmode, dord, RXPO, and TXPO
-  SERCOM0_REGS->USART_INT.SERCOM_CTRLA = 
+  SERCOM0_REGS->USART_INT.SERCOM_CTRLA |= 
     SERCOM_USART_INT_CTRLA_MODE_USART_INT_CLK | 
     SERCOM_USART_INT_CTRLA_CMODE_ASYNC | 
     SERCOM_USART_INT_CTRLA_DORD_LSB | 
     SERCOM_USART_INT_CTRLA_RXPO_PAD1 | 
     SERCOM_USART_INT_CTRLA_TXPO_PAD0;
 
-  // set baud to 0
-  SERCOM0_REGS->USART_INT.SERCOM_BAUD = 0;
-
-  // enable
-  SERCOM0_REGS->USART_INT.SERCOM_CTRLA |= SERCOM_USART_INT_CTRLA_ENABLE_Msk;
-  while((SERCOM0_REGS->USART_INT.SERCOM_SYNCBUSY & SERCOM_USART_INT_SYNCBUSY_ENABLE_Msk) == SERCOM_USART_INT_SYNCBUSY_ENABLE_Msk);
-}
+    // enable
+    SERCOM0_REGS->USART_INT.SERCOM_CTRLA |= SERCOM_USART_INT_CTRLA_ENABLE_Msk;
+    while((SERCOM0_REGS->USART_INT.SERCOM_SYNCBUSY & SERCOM_USART_INT_SYNCBUSY_ENABLE_Msk) == SERCOM_USART_INT_SYNCBUSY_ENABLE_Msk);
+    
+    // set baud to 0
+    SERCOM0_REGS->USART_INT.SERCOM_BAUD = 0;
+  }
 
 static void crcInit()
 {
@@ -150,8 +150,8 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
   }
 
   // set RS-485 GPIO pins to enter transmit mode
-  PORT_REGS->GROUP[1].PORT_OUTSET = DE_PIN;
   PORT_REGS->GROUP[1].PORT_OUTSET = RE_PIN;
+  PORT_REGS->GROUP[1].PORT_OUTSET = DE_PIN;
 
   // spin on "data register empty" flag
   while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_DRE_Msk) == 0);
@@ -209,8 +209,8 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
   while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
 
   // clear RS-485 GPIO pins to enter receive mode
-  PORT_REGS->GROUP[1].PORT_OUTCLR = DE_PIN;
   PORT_REGS->GROUP[1].PORT_OUTCLR = RE_PIN;
+  PORT_REGS->GROUP[1].PORT_OUTCLR = DE_PIN;
 }
 
 /*************** RX State Machine ******************/
@@ -353,9 +353,6 @@ RxResult rxProcessState(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t
 
 void SERCOM0_2_Handler()
 {
-  // clear interrupt flag
-  SERCOM0_REGS->USART_INT.SERCOM_INTFLAG = SERCOM_USART_INT_INTFLAG_RXC_Msk;
-
   // read in data
   uint8_t nextByte = (uint8_t)SERCOM0_REGS->USART_INT.SERCOM_DATA;
 
@@ -401,6 +398,8 @@ bool uart485ReceiveBytes(uint8_t * const bytes, uint16_t size, uint16_t timeoutM
       
       // pass data to state machine and process
       processResult = rxProcessState(nextByte, bytes, &bytesPos, size);
+
+      dbg_write_u8(&processResult, 1);
 
       // clear status register
       SERCOM0_REGS->USART_INT.SERCOM_STATUS = 0xFF;
