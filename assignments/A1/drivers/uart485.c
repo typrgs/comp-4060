@@ -9,7 +9,7 @@
 #define DE_PIN PORT_PB14
 #define RE_PIN PORT_PB05
 
-#define TX_POLL_TIMEOUT 100 // ms
+#define TX_POLL_TIMEOUT 50 // ms
 
 #define CRC_INIT_SEED 0xFFFFFFFF
 
@@ -234,6 +234,7 @@ RxState rxSearch(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expect
   if(nextByte == FRAME_START)
   {
     nextState = START;
+    crcInit(); // Reset CRC for incoming packet
   }
   else if(nextByte == SENTINEL)
   {
@@ -254,6 +255,7 @@ RxState rxStart(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expecte
   else
   {
     buf[(*bufPos)++] = nextByte;
+    crcNextByte(nextByte);
 
     if((*bufPos) > expectedSize)
     {
@@ -279,6 +281,7 @@ RxState rxStuff(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expecte
   else if(nextByte == SENTINEL)
   {
     buf[(*bufPos)++] = nextByte;
+    crcNextByte(nextByte);
   
     if((*bufPos) > expectedSize)
     {
@@ -304,6 +307,7 @@ RxState rxData(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expected
   else
   {
     buf[(*bufPos)++] = nextByte;
+    crcNextByte(nextByte);
 
     if((*bufPos) > expectedSize)
     {
@@ -336,7 +340,7 @@ RxResult rxProcessState(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t
   {
     result = INVALID;
   }
-  else if(nextState == IDLE && rxCurrState == END)
+  else if(nextState == IDLE && rxCurrState == END && crcResult() == 0)
   {
     result = VALID;
   }
