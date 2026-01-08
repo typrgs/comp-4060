@@ -103,7 +103,7 @@ static void DMAC_CRC_NextByte(uint8_t next)
   DMAC_REGS->DMAC_CRCDATAIN = next;
   
   // spin on busy bit and clear when finished
-  while(DMAC_REGS->DMAC_CRCSTATUS & DMAC_CRCSTATUS_CRCBUSY_Msk == 0);
+  while((DMAC_REGS->DMAC_CRCSTATUS & DMAC_CRCSTATUS_CRCBUSY_Msk) == 0);
   DMAC_REGS->DMAC_CRCSTATUS = DMAC_CRCSTATUS_CRCBUSY_Msk;
 }
 
@@ -123,6 +123,7 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
     if((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_RXC_Msk) == SERCOM_USART_INT_INTFLAG_RXC_Msk)
     {
       uint32_t data = SERCOM0_REGS->USART_INT.SERCOM_DATA;
+      (void) data;
       SERCOM0_REGS->USART_INT.SERCOM_STATUS = 0xFF;
       endTime = elapsedMS() + TX_POLL_TIMEOUT;
     }
@@ -133,17 +134,17 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
   PORT_REGS->GROUP[1].PORT_OUTSET = RE_PIN;
 
   // spin on "data register empty" flag
-  while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_DRE_Msk == 0);
+  while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_DRE_Msk) == 0);
 
   // setup CRC computation
   DMAC_CRC_Init();
 
   // transmit frame start byte sequence
   SERCOM0_REGS->USART_INT.SERCOM_DATA = SENTINEL;
-  while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk == 0);
+  while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
 
   SERCOM0_REGS->USART_INT.SERCOM_DATA = FRAME_START;
-  while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk == 0);
+  while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
 
   // go through byte array, sending 1 byte at a time
   for(uint16_t i=0; i<size; i++)
@@ -152,12 +153,12 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
     if(bytes[i] == SENTINEL)
     {
       SERCOM0_REGS->USART_INT.SERCOM_DATA = SENTINEL;
-      while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk == 0);
+      while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
     }
 
     SERCOM0_REGS->USART_INT.SERCOM_DATA = bytes[i];
     DMAC_CRC_NextByte(bytes[i]);
-    while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk == 0);
+    while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
   }
 
   // if the given bytes is smaller than a packet, transmit 0x00 to fill in remaining bytes
@@ -167,7 +168,7 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
     {
       SERCOM0_REGS->USART_INT.SERCOM_DATA = 0;
       DMAC_CRC_NextByte(0);
-      while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk == 0);
+      while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
     }
   }
 
@@ -175,17 +176,17 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
   uint16_t crc = DMAC_CRC_Result();
 
   SERCOM0_REGS->USART_INT.SERCOM_DATA = crc >> 8;
-  while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk == 0);
+  while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
 
   SERCOM0_REGS->USART_INT.SERCOM_DATA = crc & 0x00FF;
-  while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk == 0);
+  while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
 
   // transmit frame end byte sequence
   SERCOM0_REGS->USART_INT.SERCOM_DATA = SENTINEL;
-  while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk == 0);
+  while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
   
   SERCOM0_REGS->USART_INT.SERCOM_DATA = FRAME_END;
-  while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk == 0);
+  while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
 
   // clear RS-485 GPIO pins to enter receive mode
   PORT_REGS->GROUP[1].PORT_OUTCLR = DE_PIN;
