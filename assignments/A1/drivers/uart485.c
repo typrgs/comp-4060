@@ -5,6 +5,9 @@
 #define FRAME_START 0xA5
 #define FRAME_END 0xA6
 
+#define DE_PIN PORT_PB14
+#define RE_PIN PORT_PB05
+
 uint8_t *asyncBuf = NULL;
 uart485Callback asyncDone= NULL;
 uint8_t asyncSize = 0;
@@ -27,6 +30,12 @@ void uart485Init(uint8_t *data, uint8_t expectedSize, uart485Callback done)
   PORT_REGS->GROUP[0].PORT_PMUX[4] = PORT_PMUX_PMUXO_C;
   PORT_REGS->GROUP[0].PORT_PINCFG[8] = PORT_PINCFG_PMUXEN_Msk;
   PORT_REGS->GROUP[0].PORT_PINCFG[9] = PORT_PINCFG_PMUXEN_Msk;
+
+  // setup RS-485 GPIO pins for switching between RX and TX mode
+  PORT_REGS->GROUP[1].PORT_DIRSET = DE_PIN;
+  PORT_REGS->GROUP[1].PORT_DIRSET = RE_PIN;
+  PORT_REGS->GROUP[1].PORT_OUTCLR = DE_PIN;
+  PORT_REGS->GROUP[1].PORT_OUTCLR = RE_PIN;
 
   // if parameters are passed for async receive
   if(data != NULL && expectedSize > 0 && done != NULL)
@@ -73,14 +82,18 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
 {
   // wait until network is idle to start transmitting
   // spin on "data register empty" flag
-  while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_DRE_Msk != 0);
+  while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_DRE_Msk == 0);
+
+  // set RS-485 GPIO pins to enter transmit mode
+  PORT_REGS->GROUP[1].PORT_OUTSET = DE_PIN;
+  PORT_REGS->GROUP[1].PORT_OUTSET = RE_PIN;
 
   // transmit frame start byte sequence
   SERCOM0_REGS->USART_INT.SERCOM_DATA = SENTINEL;
-  while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk != 0);
+  while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk == 0);
 
   SERCOM0_REGS->USART_INT.SERCOM_DATA = FRAME_START;
-  while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk != 0);
+  while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk == 0);
 
   // go through byte array, sending 1 byte at a time
   for(uint16_t i=0; i<size; i++)
@@ -89,11 +102,11 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
     if(bytes[i] == SENTINEL)
     {
       SERCOM0_REGS->USART_INT.SERCOM_DATA = SENTINEL;
-      while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk != 0);
+      while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk == 0);
     }
 
     SERCOM0_REGS->USART_INT.SERCOM_DATA = bytes[i];
-    while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk != 0);
+    while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk == 0);
   }
 
   // if the given bytes is smaller than a packet, transmit 0x00 to fill in remaining bytes
@@ -102,16 +115,20 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
     for(uint16_t i=0; i<(PROTOCOL_PACKET_SIZE - size); i++)
     {
       SERCOM0_REGS->USART_INT.SERCOM_DATA = 0;
-      while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk != 0);
+      while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk == 0);
     }
   }
 
   // transmit frame end byte sequence
   SERCOM0_REGS->USART_INT.SERCOM_DATA = SENTINEL;
-  while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk != 0);
+  while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk == 0);
   
   SERCOM0_REGS->USART_INT.SERCOM_DATA = FRAME_END;
-  while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk != 0);
+  while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk == 0);
+
+  // clear RS-485 GPIO pins to enter receive mode
+  PORT_REGS->GROUP[1].PORT_OUTCLR = DE_PIN;
+  PORT_REGS->GROUP[1].PORT_OUTCLR = RE_PIN;
 }
 
 bool uart485ReceiveBytes(uint8_t * const bytes, uint16_t size, uint16_t timeoutMS)
