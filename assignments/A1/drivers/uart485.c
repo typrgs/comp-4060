@@ -11,6 +11,8 @@
 
 #define TX_POLL_TIMEOUT 100 // ms
 
+#define CRC_INIT_SEED 0xFFFFFFFF
+
 uint8_t *asyncBuf = NULL;
 uart485Callback asyncDone = NULL;
 uint8_t asyncSize = 0;
@@ -89,6 +91,27 @@ void SERCOM0_2_Handler()
   asyncDone();
 }
 
+static void DMAC_CRC_Init()
+{
+  DMAC_REGS->DMAC_CRCCTRL = DMAC_CRCCTRL_RESETVALUE;
+  DMAC_REGS->DMAC_CRCCHKSUM = CRC_INIT_SEED;
+  DMAC_REGS->DMAC_CRCCTRL = DMAC_CRCCTRL_CRCSRC_IO;
+}
+
+static void DMAC_CRC_NextByte(uint8_t next)
+{
+  DMAC_REGS->DMAC_CRCDATAIN = next;
+  
+  // spin on busy bit and clear when finished
+  while(DMAC_REGS->DMAC_CRCSTATUS & DMAC_CRCSTATUS_CRCBUSY_Msk == 0);
+  DMAC_REGS->DMAC_CRCSTATUS = DMAC_CRCSTATUS_CRCBUSY_Msk;
+}
+
+static uint16_t DMAC_CRC_Result()
+{
+  return (uint16_t)DMAC_REGS->DMAC_CRCCHKSUM;
+}
+
 void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
 {
   // wait until network is idle to start transmitting
@@ -112,6 +135,9 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
   // spin on "data register empty" flag
   while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_DRE_Msk == 0);
 
+  // setup CRC computation
+  DMAC_CRC_Init();
+
   // transmit frame start byte sequence
   SERCOM0_REGS->USART_INT.SERCOM_DATA = SENTINEL;
   while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk == 0);
@@ -130,6 +156,7 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
     }
 
     SERCOM0_REGS->USART_INT.SERCOM_DATA = bytes[i];
+    DMAC_CRC_NextByte(bytes[i]);
     while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk == 0);
   }
 
@@ -139,9 +166,19 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
     for(uint16_t i=0; i<(PROTOCOL_PACKET_SIZE - size); i++)
     {
       SERCOM0_REGS->USART_INT.SERCOM_DATA = 0;
+      DMAC_CRC_NextByte(0);
       while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk == 0);
     }
   }
+
+  // transmit CRC
+  uint16_t crc = DMAC_CRC_Result();
+
+  SERCOM0_REGS->USART_INT.SERCOM_DATA = crc >> 8;
+  while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk == 0);
+
+  SERCOM0_REGS->USART_INT.SERCOM_DATA = crc & 0x00FF;
+  while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk == 0);
 
   // transmit frame end byte sequence
   SERCOM0_REGS->USART_INT.SERCOM_DATA = SENTINEL;
