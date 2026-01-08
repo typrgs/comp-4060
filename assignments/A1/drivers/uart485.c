@@ -1,4 +1,5 @@
 #include "uart485.h"
+#include "heart.h"
 #include "net.h"
 
 #define SENTINEL 0x7E
@@ -8,8 +9,10 @@
 #define DE_PIN PORT_PB14
 #define RE_PIN PORT_PB05
 
+#define TX_POLL_TIMEOUT 100 // ms
+
 uint8_t *asyncBuf = NULL;
-uart485Callback asyncDone= NULL;
+uart485Callback asyncDone = NULL;
 uint8_t asyncSize = 0;
 
 void uart485Init(uint8_t *data, uint8_t expectedSize, uart485Callback done)
@@ -75,12 +78,33 @@ void SERCOM0_2_Handler()
   // clear interrupt flag
   SERCOM0_REGS->USART_INT.SERCOM_INTFLAG = SERCOM_USART_INT_INTFLAG_RXC_Msk;
 
+  // read in data 
+
   // process RX state machine
+
+  // clear status register
+  SERCOM0_REGS->USART_INT.SERCOM_STATUS = 0xFF;
+
+  // if full packet received, invoke callback handler
+  asyncDone();
 }
 
 void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
 {
   // wait until network is idle to start transmitting
+  uint32_t endTime = elapsedMS() + TX_POLL_TIMEOUT;
+
+  while (endTime>elapsedMS())
+  {
+    // if data comes in while waiting for the network to go idle, reset timeout and throw away the data
+    if((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_RXC_Msk) == SERCOM_USART_INT_INTFLAG_RXC_Msk)
+    {
+      uint32_t data = SERCOM0_REGS->USART_INT.SERCOM_DATA;
+      SERCOM0_REGS->USART_INT.SERCOM_STATUS = 0xFF;
+      endTime = elapsedMS() + TX_POLL_TIMEOUT;
+    }
+  }
+
   // spin on "data register empty" flag
   while(SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_DRE_Msk == 0);
 
