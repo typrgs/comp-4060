@@ -80,8 +80,6 @@ void loadParameters()
 
   for (int i=0; i<NUM_SENSORS; i++)
     activeSensors[i] = (bool)parms[i+1];
-
-  activeSensors[FAN_RPM] = true;
 }
 
 void updateFan(uint8_t dutyCycle)
@@ -559,8 +557,7 @@ int main(void)
   twiInit();
   rpmInit();
   fanInit();
-  // uart485Init((uint8_t *)requestMsg, PROTOCOL_PACKET_SIZE, checkForMsg);
-  uart485Init(NULL, 0, NULL);
+  uart485Init((uint8_t *)requestMsg, PROTOCOL_PACKET_SIZE, checkForMsg);
   heartInit();
 
   // get the temperature sensor started so we have data when we need it
@@ -584,11 +581,6 @@ int main(void)
       // make sure all writes to our shared sensor vars are atomic; coarse grained locking is fine
       readingTasks[currTask]();
       currTask = (currTask+1)%NUM_TASKS;
-
-      if(uart485ReceiveBytes(requestMsg, PROTOCOL_PACKET_SIZE, 0))
-      {
-        checkForMsg();
-      }
     }
   }
 }

@@ -121,8 +121,6 @@ void loadParameters()
 
   for (int i=0; i<NUM_SENSORS; i++)
     deviceIDs[i] = parms[i];
-
-  deviceIDs[FAN_RPM] = 1;
 }
 
 ///////////////////////////////////////////////
@@ -541,27 +539,27 @@ int main(void)
       }
     }
 
-    // if ((msCount % refreshRate) == 0)
-    // {
-    //   requestData();
+    if ((msCount % refreshRate) == 0)
+    {
+      requestData();
 
-    //   if (newDisplayData)
-    //   {
-    //     noDataCount = 0;
-    //     firstNoData = true;
-    //     updateDisplay();
-    //   }
-    //   // timeout and clear screen due to a lack of broadcast data for us to use
-    //   else
-    //   {
-    //     if (noDataCount<8)
-    //       noDataCount++;
-    //     else if (firstNoData)
-    //     {
-    //       firstNoData = false;
-    //       clearDisplay();
-    //     }
-    //   }
-    // }
+      if (newDisplayData)
+      {
+        noDataCount = 0;
+        firstNoData = true;
+        updateDisplay();
+      }
+      // timeout and clear screen due to a lack of broadcast data for us to use
+      else
+      {
+        if (noDataCount<8)
+          noDataCount++;
+        else if (firstNoData)
+        {
+          firstNoData = false;
+          clearDisplay();
+        }
+      }
+    }
   }
 }
