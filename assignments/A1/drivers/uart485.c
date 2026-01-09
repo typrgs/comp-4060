@@ -13,10 +13,10 @@
 
 #define CRC_INIT_SEED 0xFFFFFFFF
 
-uint8_t *asyncBuf = NULL;
-uint8_t asyncBufPos = 0;
-uart485Callback asyncDone = NULL;
-uint8_t asyncSize = 0;
+volatile uint8_t *asyncBuf = NULL;
+volatile uint8_t asyncBufPos = 0;
+volatile uart485Callback asyncDone = NULL;
+volatile uint8_t asyncSize = 0;
 
 typedef enum RX_RESULT
 {
@@ -26,7 +26,7 @@ typedef enum RX_RESULT
   NUM_RESULTS
 } RxResult;
 
-RxResult asyncProcessResult = NONE;
+volatile RxResult asyncProcessResult = NONE;
 
 typedef enum RX_STATE
 {
@@ -39,7 +39,7 @@ typedef enum RX_STATE
   NUM_STATES
 } RxState;
 
-RxState rxCurrState = IDLE;
+volatile RxState rxCurrState = IDLE;
 
 // state function prototypes
 RxState rxIdle(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize);
@@ -56,7 +56,7 @@ RxState (*rxStates[NUM_STATES])(uint8_t, uint8_t *, uint8_t *, uint8_t) = {rxIdl
 void uart485Init(uint8_t *data, uint8_t expectedSize, uart485Callback done)
 {
   // enable and setup generic clock 5
-  GCLK_REGS->GCLK_GENCTRL[5] = GCLK_GENCTRL_GENEN_Msk | GCLK_GENCTRL_SRC_DFLL | GCLK_GENCTRL_DIV(1);
+  GCLK_REGS->GCLK_GENCTRL[5] = GCLK_GENCTRL_GENEN_Msk | GCLK_GENCTRL_SRC_DFLL | GCLK_GENCTRL_DIV(8);
   while((GCLK_REGS->GCLK_SYNCBUSY & GCLK_SYNCBUSY_GENCTRL_GCLK5) == GCLK_SYNCBUSY_GENCTRL_GCLK5);
 
   // enable generic clock 5 to SERCOM0
@@ -195,10 +195,20 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
   // transmit CRC
   uint16_t crc = crcResult();
 
-  SERCOM0_REGS->USART_INT.SERCOM_DATA = crc >> 8;
+  if((crc >> 8) == SENTINEL)
+  {
+    SERCOM0_REGS->USART_INT.SERCOM_DATA = SENTINEL;
+    while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
+  }
+  SERCOM0_REGS->USART_INT.SERCOM_DATA = (uint8_t)(crc >> 8);
   while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
 
-  SERCOM0_REGS->USART_INT.SERCOM_DATA = crc & 0x00FF;
+  if((crc & 0x00FF) == SENTINEL)
+  {
+    SERCOM0_REGS->USART_INT.SERCOM_DATA = SENTINEL;
+    while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
+  }
+  SERCOM0_REGS->USART_INT.SERCOM_DATA = (uint8_t)(crc & 0x00FF);
   while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
 
   // transmit frame end byte sequence
@@ -207,6 +217,8 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
   
   SERCOM0_REGS->USART_INT.SERCOM_DATA = FRAME_END;
   while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
+
+  while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_DRE_Msk) == 0);
 
   // clear RS-485 GPIO pins to enter receive mode
   PORT_REGS->GROUP[1].PORT_OUTCLR = RE_PIN;
@@ -235,6 +247,7 @@ RxState rxSearch(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expect
   {
     nextState = START;
     crcInit(); // Reset CRC for incoming packet
+    (*bufPos) = 0;
   }
   else if(nextByte == SENTINEL)
   {
@@ -266,11 +279,13 @@ RxState rxStart(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expecte
 
 RxState rxStuff(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
 {
-  RxState nextState = DATA;
+  RxState nextState = IDLE;
 
   if(nextByte == FRAME_START)
   {
     nextState = START;
+    crcInit();
+    (*bufPos) = 0;
   }
   else if(nextByte == FRAME_END)
   {
@@ -278,15 +293,13 @@ RxState rxStuff(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expecte
   }
   else if(nextByte == SENTINEL)
   {
+    nextState = DATA;
+
     if((*bufPos) < expectedSize)
     {
       buf[(*bufPos)++] = nextByte;
     }
     crcNextByte(nextByte);
-  }
-  else
-  {
-    nextState = IDLE;
   }
 
   return nextState;
@@ -330,13 +343,20 @@ RxResult rxProcessState(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t
   RxState nextState = rxStates[rxCurrState](nextByte, buf, bufPos, expectedSize);
 
   // verify the result of processing the state machine
-  if(nextState == IDLE && (rxCurrState == START || rxCurrState == STUFF || rxCurrState == DATA))
+  if(nextState == IDLE && (rxCurrState == SEARCH || rxCurrState == START || rxCurrState == STUFF || rxCurrState == DATA))
   {
     result = INVALID;
   }
   else if(nextState == END && rxCurrState == STUFF)
   {
-    result = VALID;
+    if(crcResult() == 0)
+    {
+      result = VALID;
+    }
+    else
+    {
+      result = INVALID;
+    }
   }
 
   // update current state
@@ -368,7 +388,7 @@ bool uart485ReceiveBytes(uint8_t * const bytes, uint16_t size, uint16_t timeoutM
   bool result = false;
   
   RxResult processResult = NONE;
-  uint8_t bytesPos = 0;
+  volatile uint8_t bytesPos = 0;
   
   while(processResult == NONE)
   {
@@ -397,8 +417,6 @@ bool uart485ReceiveBytes(uint8_t * const bytes, uint16_t size, uint16_t timeoutM
 
     }
   }
-
-  dbg_write_u8(bytes, size);
 
   if(processResult == VALID)
   {
