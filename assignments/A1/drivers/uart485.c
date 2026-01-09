@@ -1,3 +1,4 @@
+#include "common.h"
 #include "uart485.h"
 #include "heart.h"
 #include "net.h"
@@ -13,10 +14,14 @@
 
 #define CRC_INIT_SEED 0xFFFFFFFF
 
+#define TC0_INIT_VALUE 41536
+
 uint8_t *asyncBuf = NULL;
 uint8_t asyncBufPos = 0;
 uart485Callback asyncDone = NULL;
 uint8_t asyncSize = 0;
+
+uint16_t tcOvfCount = 0;
 
 typedef enum RX_RESULT
 {
@@ -52,6 +57,43 @@ RxState rxEnd(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedS
 // state function array
 RxState (*rxStates[NUM_STATES])(uint8_t, uint8_t *, uint8_t *, uint8_t) = {rxIdle, rxSearch, rxStart, rxStuff, rxData, rxEnd};
 
+void tc0Init()
+{
+  // enables main clock to TC0 over advanced peripheral bus
+  MCLK_REGS->MCLK_APBAMASK |= MCLK_APBAMASK_TC0_Msk;
+
+  // enables generic clock 5 to TC0 over peripheral channel
+  GCLK_REGS->GCLK_PCHCTRL[9] = GCLK_PCHCTRL_CHEN_Msk | GCLK_PCHCTRL_GEN(5);
+
+  // set data register for timing
+  // by default, we have a 16-bit timer clocked at 24MHz
+  // the timer overflows every 65536 ticks
+  // we set the data register value of the timer to 41536 so it overflows every 1ms
+  TC0_REGS->COUNT16.TC_COUNT = TC0_INIT_VALUE;
+  
+  // enable the overflow interrupt
+  TC0_REGS->COUNT16.TC_INTENSET |= TC_INTENSET_OVF_Msk;
+  
+  // set higher priority than SERCOM0 RXC interrupt
+  NVIC_SetPriority(TC0_IRQn, 5);
+
+  // now we enable TC0 interrupts
+  NVIC_EnableIRQ(TC0_IRQn);
+}
+
+void tc0Enable()
+{
+  TC0_REGS->COUNT16.TC_COUNT = TC0_INIT_VALUE;
+
+  // enable timer
+  TC0_REGS->COUNT16.TC_CTRLA |= TC_CTRLA_ENABLE_Msk;
+  while((TC0_REGS->COUNT16.TC_SYNCBUSY & TC_SYNCBUSY_ENABLE_Msk) == TC_SYNCBUSY_ENABLE_Msk);
+}
+
+void tc0Disable()
+{
+  TC0_REGS->COUNT16.TC_CTRLA = 0;
+}
 
 void uart485Init(uint8_t *data, uint8_t expectedSize, uart485Callback done)
 {
@@ -89,7 +131,9 @@ void uart485Init(uint8_t *data, uint8_t expectedSize, uart485Callback done)
     // setup RXC interrupt
     SERCOM0_REGS->USART_INT.SERCOM_INTENSET = SERCOM_USART_INT_INTENSET_RXC_Msk;
 
+    NVIC_SetPriority(SERCOM0_2_IRQn, 6);
     NVIC_EnableIRQ(SERCOM0_2_IRQn);
+
   }
 
   // enable RX and TX
@@ -103,13 +147,16 @@ void uart485Init(uint8_t *data, uint8_t expectedSize, uart485Callback done)
     SERCOM_USART_INT_CTRLA_RXPO_PAD1 | 
     SERCOM_USART_INT_CTRLA_TXPO_PAD0;
 
-    // enable
-    SERCOM0_REGS->USART_INT.SERCOM_CTRLA |= SERCOM_USART_INT_CTRLA_ENABLE_Msk;
-    while((SERCOM0_REGS->USART_INT.SERCOM_SYNCBUSY & SERCOM_USART_INT_SYNCBUSY_ENABLE_Msk) == SERCOM_USART_INT_SYNCBUSY_ENABLE_Msk);
-    
-    // set baud to 0
-    SERCOM0_REGS->USART_INT.SERCOM_BAUD = 0;
-  }
+  // enable
+  SERCOM0_REGS->USART_INT.SERCOM_CTRLA |= SERCOM_USART_INT_CTRLA_ENABLE_Msk;
+  while((SERCOM0_REGS->USART_INT.SERCOM_SYNCBUSY & SERCOM_USART_INT_SYNCBUSY_ENABLE_Msk) == SERCOM_USART_INT_SYNCBUSY_ENABLE_Msk);
+  
+  // set baud to 0
+  SERCOM0_REGS->USART_INT.SERCOM_BAUD = 0;
+
+  // init timer to use when doing async receives
+  tc0Init();
+}
 
 static void crcInit()
 {
@@ -132,13 +179,43 @@ static uint16_t crcResult()
   return (uint16_t)DMAC_REGS->DMAC_CRCCHKSUM;
 }
 
+void TC0_Handler()
+{
+  TC0_REGS->COUNT16.TC_INTFLAG = TC_INTFLAG_OVF_Msk;
+
+  TC0_REGS->COUNT16.TC_COUNT = TC0_INIT_VALUE;
+  tcOvfCount++;
+}
+
 void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
 {
   // disable interrupts so we aren't receiving asynchronously while trying to transmit
   if(asyncBuf != NULL && asyncSize > 0 && asyncDone != NULL)
   {
-    NVIC_DisableIRQ(SERCOM0_2_IRQn);
+    SERCOM0_REGS->USART_INT.SERCOM_INTENCLR = SERCOM_USART_INT_INTENCLR_RXC_Msk;
   }
+
+  tc0Enable();
+
+  while(tcOvfCount < TX_POLL_TIMEOUT)
+  {
+    // wait for data
+    while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_RXC_Msk) == 0 && tcOvfCount < TX_POLL_TIMEOUT);
+  
+    // receive data
+    uint32_t data = SERCOM0_REGS->USART_INT.SERCOM_DATA;
+    (void) data;
+    SERCOM0_REGS->USART_INT.SERCOM_STATUS = 0xFF;
+  
+    // reset timeout
+    if(tcOvfCount < TX_POLL_TIMEOUT)
+    {
+      TC0_REGS->COUNT16.TC_COUNT = 0;
+      tcOvfCount = 0;
+    }
+  }
+
+  tc0Disable();
 
   // set RS-485 GPIO pins to enter transmit mode
   PORT_REGS->GROUP[1].PORT_OUTSET = RE_PIN;
@@ -218,7 +295,7 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
   // reenable interrupts
   if(asyncBuf != NULL && asyncSize > 0 && asyncDone != NULL)
   {
-    NVIC_EnableIRQ(SERCOM0_2_IRQn);
+    SERCOM0_REGS->USART_INT.SERCOM_INTENSET = SERCOM_USART_INT_INTENSET_RXC_Msk;
   }
 }
 
