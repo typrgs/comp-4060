@@ -13,10 +13,10 @@
 
 #define CRC_INIT_SEED 0xFFFFFFFF
 
-volatile uint8_t *asyncBuf = NULL;
-volatile uint8_t asyncBufPos = 0;
-volatile uart485Callback asyncDone = NULL;
-volatile uint8_t asyncSize = 0;
+uint8_t *asyncBuf = NULL;
+uint8_t asyncBufPos = 0;
+uart485Callback asyncDone = NULL;
+uint8_t asyncSize = 0;
 
 typedef enum RX_RESULT
 {
@@ -56,7 +56,7 @@ RxState (*rxStates[NUM_STATES])(uint8_t, uint8_t *, uint8_t *, uint8_t) = {rxIdl
 void uart485Init(uint8_t *data, uint8_t expectedSize, uart485Callback done)
 {
   // enable and setup generic clock 5
-  GCLK_REGS->GCLK_GENCTRL[5] = GCLK_GENCTRL_GENEN_Msk | GCLK_GENCTRL_SRC_DFLL | GCLK_GENCTRL_DIV(8);
+  GCLK_REGS->GCLK_GENCTRL[5] = GCLK_GENCTRL_GENEN_Msk | GCLK_GENCTRL_SRC_DFLL | GCLK_GENCTRL_DIV(2);
   while((GCLK_REGS->GCLK_SYNCBUSY & GCLK_SYNCBUSY_GENCTRL_GCLK5) == GCLK_SYNCBUSY_GENCTRL_GCLK5);
 
   // enable generic clock 5 to SERCOM0
@@ -134,19 +134,10 @@ static uint16_t crcResult()
 
 void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
 {
-  // wait until network is idle to start transmitting
-  uint32_t endTime = elapsedMS() + TX_POLL_TIMEOUT;
-
-  while (endTime>elapsedMS())
+  // disable interrupts so we aren't receiving asynchronously while trying to transmit
+  if(asyncBuf != NULL && asyncSize > 0 && asyncDone != NULL)
   {
-    // if data comes in while waiting for the network to go idle, reset timeout and throw away the data
-    if((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_RXC_Msk) == SERCOM_USART_INT_INTFLAG_RXC_Msk)
-    {
-      uint32_t data = SERCOM0_REGS->USART_INT.SERCOM_DATA;
-      (void) data;
-      SERCOM0_REGS->USART_INT.SERCOM_STATUS = 0xFF;
-      endTime = elapsedMS() + TX_POLL_TIMEOUT;
-    }
+    NVIC_DisableIRQ(SERCOM0_2_IRQn);
   }
 
   // set RS-485 GPIO pins to enter transmit mode
@@ -223,6 +214,12 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
   // clear RS-485 GPIO pins to enter receive mode
   PORT_REGS->GROUP[1].PORT_OUTCLR = RE_PIN;
   PORT_REGS->GROUP[1].PORT_OUTCLR = DE_PIN;
+
+  // reenable interrupts
+  if(asyncBuf != NULL && asyncSize > 0 && asyncDone != NULL)
+  {
+    NVIC_EnableIRQ(SERCOM0_2_IRQn);
+  }
 }
 
 /*************** RX State Machine ******************/
@@ -388,7 +385,7 @@ bool uart485ReceiveBytes(uint8_t * const bytes, uint16_t size, uint16_t timeoutM
   bool result = false;
   
   RxResult processResult = NONE;
-  volatile uint8_t bytesPos = 0;
+  uint8_t bytesPos = 0;
   
   while(processResult == NONE)
   {
@@ -399,22 +396,21 @@ bool uart485ReceiveBytes(uint8_t * const bytes, uint16_t size, uint16_t timeoutM
     {
       currTime = elapsedMS();
     }
-  
+
+    // read data
+    uint8_t nextByte = (uint8_t)SERCOM0_REGS->USART_INT.SERCOM_DATA;
+    
+    // clear status register
+    SERCOM0_REGS->USART_INT.SERCOM_STATUS = 0xFF;
+    
     if(timeoutMS > 0 && currTime >= endTime)
     {
       processResult = INVALID;
     }
     else
     {
-      // read data
-      uint8_t nextByte = (uint8_t)SERCOM0_REGS->USART_INT.SERCOM_DATA;
-      
       // pass data to state machine and process
       processResult = rxProcessState(nextByte, bytes, &bytesPos, size);
-
-      // clear status register
-      SERCOM0_REGS->USART_INT.SERCOM_STATUS = 0xFF;
-
     }
   }
 
