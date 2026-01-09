@@ -84,6 +84,7 @@ void tc0Init()
 void tc0Enable()
 {
   TC0_REGS->COUNT16.TC_COUNT = TC0_INIT_VALUE;
+  tcOvfCount = 0;
 
   // enable timer
   TC0_REGS->COUNT16.TC_CTRLA |= TC_CTRLA_ENABLE_Msk;
@@ -195,8 +196,10 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
     SERCOM0_REGS->USART_INT.SERCOM_INTENCLR = SERCOM_USART_INT_INTENCLR_RXC_Msk;
   }
 
+  // start timer for carrier sensing timeout
   tc0Enable();
 
+  // do carrier sensing
   while(tcOvfCount < TX_POLL_TIMEOUT)
   {
     // wait for data
@@ -215,6 +218,7 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
     }
   }
 
+  // stop timer for carrier sensing timeout
   tc0Disable();
 
   // set RS-485 GPIO pins to enter transmit mode
@@ -263,6 +267,7 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
   // transmit CRC
   uint16_t crc = crcResult();
 
+  // make sure to stuff sentinel bytes if CRC bytes are equal to sentinel
   if((crc >> 8) == SENTINEL)
   {
     SERCOM0_REGS->USART_INT.SERCOM_DATA = SENTINEL;
@@ -286,6 +291,7 @@ void uart485SendBytes(uint8_t const * const bytes, uint16_t size)
   SERCOM0_REGS->USART_INT.SERCOM_DATA = FRAME_END;
   while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
 
+  // make sure everything finishes sending
   while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_DRE_Msk) == 0);
 
   // clear RS-485 GPIO pins to enter receive mode
@@ -421,8 +427,10 @@ RxResult rxProcessState(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t
   {
     result = INVALID;
   }
+  // ensure we finish with the correct transition
   else if(nextState == END && rxCurrState == STUFF)
   {
+    // verify computed CRC
     if(crcResult() == 0)
     {
       result = VALID;
@@ -464,8 +472,10 @@ bool uart485ReceiveBytes(uint8_t * const bytes, uint16_t size, uint16_t timeoutM
   RxResult processResult = NONE;
   uint8_t bytesPos = 0;
   
+  // continue processing RX state machine until either a valid or invalid result is given
   while(processResult == NONE)
   {
+    // set time variables for measuring timeout
     uint32_t currTime = elapsedMS();
     uint32_t endTime = currTime + (uint32_t)timeoutMS;
 
@@ -480,6 +490,7 @@ bool uart485ReceiveBytes(uint8_t * const bytes, uint16_t size, uint16_t timeoutM
     // clear status register
     SERCOM0_REGS->USART_INT.SERCOM_STATUS = 0xFF;
     
+    // return invalid if we timed out
     if(timeoutMS > 0 && currTime >= endTime)
     {
       processResult = INVALID;
@@ -491,6 +502,7 @@ bool uart485ReceiveBytes(uint8_t * const bytes, uint16_t size, uint16_t timeoutM
     }
   }
 
+  // set return value on valid receive
   if(processResult == VALID)
   {
     result = true;
