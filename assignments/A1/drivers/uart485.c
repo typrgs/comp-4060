@@ -43,7 +43,7 @@ RxState rxCurrState = IDLE;
 
 // state function prototypes
 RxState rxIdle(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize);
-RxState rxSearch(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t asyncSize);
+RxState rxSearch(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize);
 RxState rxStart(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize);
 RxState rxStuff(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize);
 RxState rxData(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize);
@@ -254,13 +254,11 @@ RxState rxStart(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expecte
   }
   else
   {
-    buf[(*bufPos)++] = nextByte;
-    crcNextByte(nextByte);
-
-    if((*bufPos) > expectedSize)
+    if((*bufPos) < expectedSize)
     {
-      nextState = IDLE;
+      buf[(*bufPos)++] = nextByte;
     }
+    crcNextByte(nextByte);
   }
 
   return nextState;
@@ -280,13 +278,11 @@ RxState rxStuff(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expecte
   }
   else if(nextByte == SENTINEL)
   {
-    buf[(*bufPos)++] = nextByte;
-    crcNextByte(nextByte);
-  
-    if((*bufPos) > expectedSize)
+    if((*bufPos) < expectedSize)
     {
-      nextState = IDLE;
+      buf[(*bufPos)++] = nextByte;
     }
+    crcNextByte(nextByte);
   }
   else
   {
@@ -306,13 +302,11 @@ RxState rxData(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expected
   }
   else
   {
-    buf[(*bufPos)++] = nextByte;
-    crcNextByte(nextByte);
-
-    if((*bufPos) > expectedSize)
+    if((*bufPos) < expectedSize)
     {
-      nextState = IDLE;
+      buf[(*bufPos)++] = nextByte;
     }
+    crcNextByte(nextByte);
   }
 
   return nextState;
@@ -340,7 +334,7 @@ RxResult rxProcessState(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t
   {
     result = INVALID;
   }
-  else if(nextState == IDLE && rxCurrState == END && crcResult() == 0)
+  else if(nextState == END && rxCurrState == STUFF)
   {
     result = VALID;
   }
@@ -366,7 +360,6 @@ void SERCOM0_2_Handler()
   if(asyncProcessResult == VALID)
   {
     asyncDone();
-    asyncBufPos = 0; // reset buffer position for next message
   }
 }
 
@@ -399,12 +392,13 @@ bool uart485ReceiveBytes(uint8_t * const bytes, uint16_t size, uint16_t timeoutM
       // pass data to state machine and process
       processResult = rxProcessState(nextByte, bytes, &bytesPos, size);
 
-      dbg_write_u8(&processResult, 1);
-
       // clear status register
       SERCOM0_REGS->USART_INT.SERCOM_STATUS = 0xFF;
+
     }
   }
+
+  dbg_write_u8(bytes, size);
 
   if(processResult == VALID)
   {
