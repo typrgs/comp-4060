@@ -20,6 +20,18 @@ uint8_t asyncBufPos = 0;
 CANCallback asyncDone = NULL;
 uint8_t asyncSize = 0;
 
+bool sensing = false;
+bool transmitting = false;
+uint8_t byteReceived = 0;
+bool newByteReceived = false;
+bool receivedWhileSensing = false;
+
+// doing linear backoff, start at 1 and increment on each collision
+uint8_t backoffMult = 1;
+#define BACKOFF_MULT_CAP 10
+#define BACKOFF_MAX 10
+#define BACKOFF_MIN 1
+
 uint16_t tcOvfCount = 0;
 
 typedef enum RX_RESULT
@@ -80,6 +92,11 @@ static void tc0Init()
   NVIC_EnableIRQ(TC0_IRQn);
 }
 
+static void trngInit()
+{
+  TRNG_REGS->TRNG_CTRLA = TRNG_CTRLA_ENABLE_Msk;
+}
+
 void CANInit(uint8_t *data, uint8_t expectedSize, CANCallback done)
 {
   // enable and setup generic clock 5
@@ -114,8 +131,8 @@ void CANInit(uint8_t *data, uint8_t expectedSize, CANCallback done)
   NVIC_SetPriority(SERCOM0_2_IRQn, 6);
   NVIC_EnableIRQ(SERCOM0_2_IRQn);
 
-  // enable RX by default
-  SERCOM0_REGS->USART_INT.SERCOM_CTRLB |= SERCOM_USART_INT_CTRLB_RXEN_Msk;
+  // enable both TX and RX
+  SERCOM0_REGS->USART_INT.SERCOM_CTRLB |= SERCOM_USART_INT_CTRLB_RXEN_Msk | SERCOM_USART_INT_CTRLB_TXEN_Msk;
 
   // set mode, cmode, dord, RXPO, and TXPO
   SERCOM0_REGS->USART_INT.SERCOM_CTRLA |= 
@@ -134,6 +151,9 @@ void CANInit(uint8_t *data, uint8_t expectedSize, CANCallback done)
 
   // init timer to use when doing async receives
   tc0Init();
+
+  // init TRNG unit to use for random backoff time
+  trngInit();
 }
 
 static void crcInit()
@@ -180,11 +200,155 @@ void TC0_Handler()
   tcOvfCount++;
 }
 
+static bool transmitByte(uint8_t *byte)
+{
+  bool result = true;
+  newByteReceived = false;
+
+  SERCOM0_REGS->USART_INT.SERCOM_DATA = byte;
+  while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
+
+  // start timer for timeout
+  tc0Enable();
+
+  // wait for a new byte to come in, or timeout if nothing comes in
+  while(!newByteReceived && tcOvfCount < TX_POLL_TIMEOUT);
+
+  // disable timer
+  tc0Disable();
+
+  // if we timed out or the byte we got back is not what we sent, return false to indicate collision
+  if(tcOvfCount >= TX_POLL_TIMEOUT || byte != byteReceived)
+  {
+    result = false;
+  }
+
+  return result;
+}
+
 bool CANSendBytes(uint8_t const * const bytes, uint16_t size)
 {
   bool result = true;
 
+  // wait to do carrier sensing until state machine reaches the idle RX state 
+  while(rxCurrState != IDLE);
+
+  // set flag to indicate doing carrier sensing and start timeout timer
+  sensing = true;
+  tc0Enable();
+
+  // do carrier sensing
+  receivedWhileSensing = false;
+
+  while(tcOvfCount < TX_POLL_TIMEOUT)
+  {
+    // wait for a byte to come in or reach timeout
+    while(!receivedWhileSensing && tcOvfCount < TX_POLL_TIMEOUT);
+
+    // reset flag and ovf count if a byte is received before reaching timeout
+    if(receivedWhileSensing)
+    {
+      receivedWhileSensing = false;
+      tcOvfCount = 0;
+    }
+  }
   
+  // update flags in this order to prevent RX interrupt from processing any stray byte, causing the state machine to transition
+  transmitting = true;
+  sensing = false;
+  tc0Disable();
+
+  // begin transmitting bytes
+
+  // transmit frame start byte sequence
+  if(!transmitByte(SENTINEL))
+    goto backoff;
+
+  if(!transmitByte(FRAME_START))
+    goto backoff;
+
+  // go through byte array, sending 1 byte at a time
+  for(uint16_t i=0; i<size; i++)
+  {
+    // stuff a byte if equal to the sentinel
+    if(bytes[i] == SENTINEL)
+    {
+      if(!transmitByte(SENTINEL))
+        goto backoff;
+    }
+
+    crcNextByte(bytes[i]);
+    if(!transmitByte(bytes[i]))
+      goto backoff;
+  }
+
+  // if the given bytes is smaller than a packet, transmit 0x00 to fill in remaining bytes
+  if(size < PROTOCOL_PACKET_SIZE)
+  {
+    for(uint16_t i=0; i<(PROTOCOL_PACKET_SIZE - size); i++)
+    {
+      crcNextByte(0);
+      if(!transmitByte(0))
+        goto backoff;
+    }
+  }
+
+  // transmit CRC
+  uint16_t crc = crcResult();
+
+  // make sure to stuff sentinel bytes if CRC bytes are equal to sentinel
+  if((crc >> 8) == SENTINEL)
+  {
+    if(!transmitByte(SENTINEL))
+      goto backoff;
+  }
+  if(!transmitByte((crc >> 8)))
+    goto backoff;
+
+  if((crc & 0x00FF) == SENTINEL)
+  {
+    if(!transmitByte(SENTINEL))
+      goto backoff;
+  }
+  if(!transmitByte(crc & 0x00FF))
+    goto backoff;
+
+  // transmit frame end byte sequence
+  if(!transmitByte(SENTINEL))
+    goto backoff;
+
+  if(!transmitByte(FRAME_END))
+    goto backoff;
+
+  // make sure everything finishes sending
+  while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_DRE_Msk) == 0);
+
+  // skip to end if successful
+  goto finish;
+
+backoff:
+  result = false;
+
+  // do backoff
+  // wait for random data to be ready
+  while((TRNG_REGS->TRNG_INTFLAG & TRNG_INTFLAG_DATARDY_Msk) == 0);
+  uint32_t randVal = TRNG_REGS->TRNG_DATA;
+
+  // get number from 1 to 10, used for ms delay
+  randVal = (randVal % BACKOFF_MAX) + BACKOFF_MIN;
+  randVal *= backoffMult;
+
+  // start timer for timeout
+  tc0Enable();
+
+  // wait for timeout
+  while(tcOvfCount < randVal);
+
+  // disable timer when done
+  tc0Disable();
+
+finish:
+  transmitting = false;
 
   return result;
 }
@@ -335,17 +499,26 @@ RxResult rxProcessState(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t
 void SERCOM0_2_Handler()
 {
   // read in data
-  uint8_t nextByte = (uint8_t)SERCOM0_REGS->USART_INT.SERCOM_DATA;
-
-  // process RX state machine
-  asyncProcessResult = rxProcessState(nextByte, asyncBuf, &asyncBufPos, asyncSize);
+  byteReceived = (uint8_t)SERCOM0_REGS->USART_INT.SERCOM_DATA;
+  newByteReceived = true;
 
   // clear status register
   SERCOM0_REGS->USART_INT.SERCOM_STATUS = 0xFF;
 
-  // if full packet received, invoke callback handler
-  if(asyncProcessResult == VALID)
+  // only process bytes when not sensing or transmitting
+  if(!sensing && !transmitting)
   {
-    asyncDone();
+    // process RX state machine
+    asyncProcessResult = rxProcessState(byteReceived, asyncBuf, &asyncBufPos, asyncSize);
+
+    // if full packet received, invoke callback handler
+    if(asyncProcessResult == VALID)
+    {
+      asyncDone();
+    }
+  }
+  else if(sensing)
+  {
+    receivedWhileSensing = true;
   }
 }
