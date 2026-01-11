@@ -7,8 +7,7 @@
 #define FRAME_START 0xA5
 #define FRAME_END 0xA6
 
-#define DE_PIN PORT_PB14
-#define RE_PIN PORT_PB05
+#define CS_PIN PORT_PB05
 
 #define TX_POLL_TIMEOUT 50 // ms
 
@@ -115,11 +114,9 @@ void uartCANInit(uint8_t *data, uint8_t expectedSize, uartCANCallback done)
   PORT_REGS->GROUP[0].PORT_PINCFG[8] = PORT_PINCFG_PMUXEN_Msk;
   PORT_REGS->GROUP[0].PORT_PINCFG[9] = PORT_PINCFG_PMUXEN_Msk;
 
-  // setup RS-485 GPIO pins for switching between RX and TX mode
-  PORT_REGS->GROUP[1].PORT_DIRSET = RE_PIN;
-  PORT_REGS->GROUP[1].PORT_DIRSET = DE_PIN;
-  PORT_REGS->GROUP[1].PORT_OUTCLR = RE_PIN;
-  PORT_REGS->GROUP[1].PORT_OUTCLR = DE_PIN;
+  // setup CAN GPIO pins to set standard mode
+  PORT_REGS->GROUP[1].PORT_DIRSET = CS_PIN;
+  PORT_REGS->GROUP[1].PORT_OUTCLR = CS_PIN;
 
   // if parameters are passed for async receive
   if(data != NULL && expectedSize > 0 && done != NULL)
@@ -134,11 +131,10 @@ void uartCANInit(uint8_t *data, uint8_t expectedSize, uartCANCallback done)
 
     NVIC_SetPriority(SERCOM0_2_IRQn, 6);
     NVIC_EnableIRQ(SERCOM0_2_IRQn);
-
   }
 
-  // enable RX and TX
-  SERCOM0_REGS->USART_INT.SERCOM_CTRLB |= SERCOM_USART_INT_CTRLB_RXEN_Msk | SERCOM_USART_INT_CTRLB_TXEN_Msk; 
+  // enable RX by default
+  SERCOM0_REGS->USART_INT.SERCOM_CTRLB |= SERCOM_USART_INT_CTRLB_RXEN_Msk;
 
   // set mode, cmode, dord, RXPO, and TXPO
   SERCOM0_REGS->USART_INT.SERCOM_CTRLA |= 
@@ -221,9 +217,8 @@ void uartCANSendBytes(uint8_t const * const bytes, uint16_t size)
   // stop timer for carrier sensing timeout
   tc0Disable();
 
-  // set RS-485 GPIO pins to enter transmit mode
-  PORT_REGS->GROUP[1].PORT_OUTSET = RE_PIN;
-  PORT_REGS->GROUP[1].PORT_OUTSET = DE_PIN;
+  // switch to TX mode in CTRLB
+  SERCOM0_REGS->USART_INT.SERCOM_CTRLB = SERCOM_USART_INT_CTRLB_TXEN_Msk;
 
   // spin on "data register empty" flag
   while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_DRE_Msk) == 0);
@@ -294,9 +289,8 @@ void uartCANSendBytes(uint8_t const * const bytes, uint16_t size)
   // make sure everything finishes sending
   while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_DRE_Msk) == 0);
 
-  // clear RS-485 GPIO pins to enter receive mode
-  PORT_REGS->GROUP[1].PORT_OUTCLR = RE_PIN;
-  PORT_REGS->GROUP[1].PORT_OUTCLR = DE_PIN;
+  // switch to RX mode in CTRLB
+  SERCOM0_REGS->USART_INT.SERCOM_CTRLB = SERCOM_USART_INT_CTRLB_RXEN_Msk;
 
   // reenable interrupts
   if(asyncBuf != NULL && asyncSize > 0 && asyncDone != NULL)
