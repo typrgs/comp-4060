@@ -231,9 +231,19 @@ bool CANSendBytes(uint8_t const * const bytes, uint16_t size)
   bool result = true;
 
   // wait to do carrier sensing until state machine reaches the idle RX state 
-  while(rxCurrState != IDLE);
-
-  // set flag to indicate doing carrier sensing and start timeout timer
+  while(rxCurrState != IDLE && rxCurrState != END)
+  {
+    // set flag to indicate doing carrier sensing and start timeout timer
+    if(rxCurrState == IDLE || rxCurrState == END)
+    {
+      sensing = true;
+    }
+    else
+    {
+      sensing = false;
+    }
+  }  
+  
   sensing = true;
   tc0Enable();
 
