@@ -200,7 +200,7 @@ void TC0_Handler()
   tcOvfCount++;
 }
 
-static bool transmitByte(uint8_t *byte)
+static bool transmitByte(uint8_t byte)
 {
   bool result = true;
   newByteReceived = false;
@@ -238,17 +238,16 @@ bool CANSendBytes(uint8_t const * const bytes, uint16_t size)
   tc0Enable();
 
   // do carrier sensing
-  receivedWhileSensing = false;
-
   while(tcOvfCount < TX_POLL_TIMEOUT)
   {
+    receivedWhileSensing = false;
+
     // wait for a byte to come in or reach timeout
     while(!receivedWhileSensing && tcOvfCount < TX_POLL_TIMEOUT);
 
     // reset flag and ovf count if a byte is received before reaching timeout
     if(receivedWhileSensing)
     {
-      receivedWhileSensing = false;
       tcOvfCount = 0;
     }
   }
@@ -259,6 +258,7 @@ bool CANSendBytes(uint8_t const * const bytes, uint16_t size)
   tc0Disable();
 
   // begin transmitting bytes
+  crcInit();
 
   // transmit frame start byte sequence
   if(!transmitByte(SENTINEL))
