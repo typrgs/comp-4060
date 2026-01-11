@@ -9,7 +9,7 @@
 
 #define CS_PIN PORT_PB05
 
-#define TX_POLL_TIMEOUT 50 // ms
+#define TX_POLL_TIMEOUT 10 // ms
 
 #define CRC_INIT_SEED 0xFFFFFFFF
 
@@ -323,10 +323,17 @@ bool CANSendBytes(uint8_t const * const bytes, uint16_t size)
   // make sure everything finishes sending
   while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_DRE_Msk) == 0);
 
-  // skip to end if successful
+  // reset flag to finish transmitting
+  transmitting = false;
+
+  // backoff multiplier gets reset upon transmitting with no collision
+  backoffMult = 1;
+
+  // skip to end
   goto finish;
 
 backoff:
+  transmitting = false;
   result = false;
 
   // do backoff
@@ -338,6 +345,12 @@ backoff:
   randVal = (randVal % BACKOFF_MAX) + BACKOFF_MIN;
   randVal *= backoffMult;
 
+  // increase backoff multiplier if not at the cap
+  if(backoffMult < BACKOFF_MULT_CAP)
+  {
+    backoffMult++;
+  }
+
   // start timer for timeout
   tc0Enable();
 
@@ -348,8 +361,6 @@ backoff:
   tc0Disable();
 
 finish:
-  transmitting = false;
-
   return result;
 }
 
