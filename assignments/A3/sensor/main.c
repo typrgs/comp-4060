@@ -1,0 +1,643 @@
+#include "common.h"
+#include "heart.h"
+#include "twi.h"
+#include "net.h"
+#include "can.h"
+
+/*
+  We don't *need* to have asynchronous request handling. We could use a blocked receive with a short timeout to poll
+  continuously for requests.
+
+  By making it asynchronous you only respond to a request when you receive one and idle otherwise.
+
+  This then lets you schedule tasks for sampling the different sensors that are attached, at rates required by each
+  sensor, and only report on the latest value upon a specific request.
+
+  But having an interrupt fire while sampling, and the interrupt wants some of the data being sampled, means that we
+  now have to deal with a lack of atomic operations. Therefore we lock all updates to our variables to ensure that nothing
+  gets corrupted and/or the scheduler hangs.
+*/
+
+// scheduling intervals, at millisecond granularity
+
+// flash twice a second
+#define LED_FLASH_MS      500UL
+
+// send data out at a fixed rate
+#define LOAD_BROADCAST_MS 113UL
+
+// Temperature/Humidity Sensor I2C cmds
+#define TEMP_SENSOR_ADDR  0x44
+#define TEMP_READ_MSB     0xE0
+#define TEMP_READ_LSB     0x00
+
+#define TEMP_ART_MSB   0x2B
+#define TEMP_ART_LSB   0x32
+
+#define TEMP_BREAK_MSB   0x30
+#define TEMP_BREAK_LSB   0x93
+
+// this gives us a SCL 4MHz
+#define TEMP_BAUD 2
+
+#define EXTINT4_MASK 0x0010
+
+// conversion factor for our RPM calculations, with a clock running at a fraction of our heartbeat
+// running at 12MHz to ensure that we have enough time to capture slowest RPM
+#define RPM_CLOCK_DIV 4
+// 48000 is our clocking factor, assuming *no* overclocking
+#define RPM_MS_FACTOR (48000UL/RPM_CLOCK_DIV)
+
+// see fan data sheet for pulses to capture for accurate RPM calculations
+#define START_PULSE 1
+#define END_PULSE 3
+
+#define MAX_SAMPLES 128
+
+typedef void(*Task)(void);
+
+volatile uint16_t num_analog_samples = 0;
+volatile uint32_t avg_analog = 0;
+volatile uint16_t num_hall_samples = 0;
+volatile uint32_t avg_hall = 0;
+volatile uint32_t avgTemperature = 0;
+volatile uint32_t avgHumidity = 0;
+
+volatile uint8_t requestMsg[PROTOCOL_PACKET_SIZE];
+
+volatile Packet broadcastMsg;
+
+static bool activeSensors[NUM_SENSORS];
+static uint8_t myID = 0;
+static uint8_t broadcastMultiplier = 1;
+
+// values updated inside an interrupt and needed outside 
+volatile uint16_t fanRPM = 0;
+
+// parameterized in the assignment code that is the source (so students can experiment)
+static uint8_t numSamples = 16;
+static uint8_t clockDivisor = 4;
+
+void loadParameters()
+{
+  uint8_t *parms = (uint8_t *)PARAMETER_ADDR;
+
+  myID = parms[0];
+  broadcastMultiplier = parms[1];
+
+  for (int i=0; i<NUM_SENSORS; i++)
+    activeSensors[i] = (bool)parms[i+2];
+}
+
+void updateFan(uint8_t dutyCycle)
+{
+  if (activeSensors[FAN_RPM])
+  {
+    TC1_REGS->COUNT8.TC_CC[0] = dutyCycle;
+  }
+}
+
+void fanInit()
+{
+  if (activeSensors[FAN_RPM])
+  {
+    // setup the output control pin
+    PORT_REGS->GROUP[0].PORT_DIRSET = PORT_PA10;
+    PORT_REGS->GROUP[0].PORT_OUTSET = PORT_PA10;
+    PORT_REGS->GROUP[0].PORT_PINCFG[10] |= PORT_PINCFG_PMUXEN_Msk;
+    PORT_REGS->GROUP[0].PORT_PMUX[5] |= PORT_PMUX_PMUXE_E;
+  
+    // use generic clock 10 as our clock for this device, slowing the clock to make the duty cycle changes noticeable
+    // this is set in conjunction with the pre-scaler (below) to give a frequency in kHz
+    // students will experiment and report on their findings; the value selected is good but students can have different values based on experimentation
+    GCLK_REGS->GCLK_GENCTRL[10] = GCLK_GENCTRL_DIV(clockDivisor) | GCLK_GENCTRL_SRC_DFLL | GCLK_GENCTRL_GENEN_Msk;
+    while((GCLK_REGS->GCLK_SYNCBUSY & GCLK_SYNCBUSY_GENCTRL_GCLK4) == GCLK_SYNCBUSY_GENCTRL_GCLK4)
+      ;/* Wait for synchronization */
+
+    // have to enable the peripheral clocks I need via the generic and main clocks
+    // see page 156 of data sheet for GCLK array offsets
+    GCLK_REGS->GCLK_PCHCTRL[9] = GCLK_PCHCTRL_GEN(10) | GCLK_PCHCTRL_CHEN_Msk;
+    while ((GCLK_REGS->GCLK_PCHCTRL[9] & GCLK_PCHCTRL_CHEN_Msk) != GCLK_PCHCTRL_CHEN_Msk)
+      ;/* Wait for synchronization */
+
+    MCLK_REGS->MCLK_APBAMASK |= MCLK_APBAMASK_TC1_Msk;
+
+    // this is the pre-scaler I chose so I can demonstrate "stiction"
+    // values (and clocking) used in submissions will be discussed in their write-up
+    TC1_REGS->COUNT8.TC_CTRLA = TC_CTRLA_MODE_COUNT8 | TC_CTRLA_PRESCALER_DIV256;
+
+    TC1_REGS->COUNT8.TC_WAVE = TC_WAVE_WAVEGEN_NPWM;
+
+    // start the timer
+    TC1_REGS->COUNT8.TC_CTRLA |= TC_CTRLA_ENABLE_Msk;
+  }
+}
+
+void rpmInit()
+{
+  if (activeSensors[FAN_RPM])
+  {
+    // RPM input, with a pull-up (using internal but we should use an external 1K for a less glitchy signal)
+    PORT_REGS->GROUP[0].PORT_DIRCLR = PORT_PA04;
+    PORT_REGS->GROUP[0].PORT_PINCFG[4] = PORT_PINCFG_PMUXEN_Msk | PORT_PINCFG_PULLEN_Msk;
+    PORT_REGS->GROUP[0].PORT_OUTSET = PORT_PA04;
+
+    //setup the event system
+    MCLK_REGS->MCLK_APBBMASK |= MCLK_APBBMASK_EVSYS_Msk;
+    // see data sheet page 798 for indices (TCC0 MC0 used here) and page 799 for channel selection (channel 0, generated by ext int 4 as set below)
+    EVSYS_REGS->EVSYS_USER[19] = 0x01;
+    // see data sheet page 792 for event generator values (Ext Int 4 used here)
+    EVSYS_REGS->CHANNEL[0].EVSYS_CHANNEL = EVSYS_CHANNEL_EVGEN(0x16) | EVSYS_CHANNEL_PATH_ASYNCHRONOUS;
+
+    // RPM input goes to an external interrupt, with events being generated for each rising edge
+    PORT_REGS->GROUP[0].PORT_PMUX[2] = PORT_PMUX_PMUXE_A;
+    EIC_REGS->EIC_CONFIG[0] = EIC_CONFIG_SENSE4_RISE;
+    EIC_REGS->EIC_EVCTRL = EXTINT4_MASK;
+    EIC_REGS->EIC_CTRLA = EIC_CTRLA_CKSEL_CLK_ULP32K | EIC_CTRLA_ENABLE_Msk;
+
+    // input events are then captured using TCC0
+
+    // use generic clock 5 as our clock for this device
+    GCLK_REGS->GCLK_GENCTRL[5] = GCLK_GENCTRL_DIV(RPM_CLOCK_DIV) | GCLK_GENCTRL_SRC_DFLL | GCLK_GENCTRL_GENEN_Msk;
+    while((GCLK_REGS->GCLK_SYNCBUSY & GCLK_SYNCBUSY_GENCTRL_GCLK5) == GCLK_SYNCBUSY_GENCTRL_GCLK5)
+      ;/* Wait for synchronization */
+
+    // have to enable the peripheral clocks I need via the generic and main clocks
+    // see page 156 of data sheet for GCLK array offsets
+    GCLK_REGS->GCLK_PCHCTRL[25] = GCLK_PCHCTRL_GEN(5) | GCLK_PCHCTRL_CHEN_Msk;
+    while ((GCLK_REGS->GCLK_PCHCTRL[25] & GCLK_PCHCTRL_CHEN_Msk) != GCLK_PCHCTRL_CHEN_Msk)
+      ;/* Wait for synchronization */
+
+    MCLK_REGS->MCLK_APBBMASK |= MCLK_APBBMASK_TCC0_Msk;
+
+    TCC0_REGS->TCC_EVCTRL = TCC_EVCTRL_MCEI0_Msk;
+    TCC0_REGS->TCC_INTENSET = TCC_INTENSET_MC0_Msk | TCC_INTENSET_OVF_Msk;
+    TCC0_REGS->TCC_CTRLA = TCC_CTRLA_CPTEN0_Msk | TCC_CTRLA_ENABLE_Msk;
+
+    NVIC_EnableIRQ(TCC0_MC0_IRQn);
+    NVIC_EnableIRQ(TCC0_OTHER_IRQn);
+  }
+}
+
+// clock is setup to ensure that it never overflows within our RPM range; an overflow indicates no pulse, or that the fan has stopped
+void TCC0_OTHER_Handler()
+{
+  if ((TCC0_REGS->TCC_INTFLAG & TCC_INTFLAG_OVF_Msk) == TCC_INTFLAG_OVF_Msk)
+  {
+    fanRPM = 0;
+    // clear the interrupt!
+    TCC0_REGS->TCC_INTFLAG |= TCC_INTFLAG_OVF_Msk;
+  }
+}
+
+// we do need averaging as there is some jitter in the feedback from the fan
+// ISR for match capture events
+void TCC0_MC0_Handler()
+{
+  static uint8_t  pulseCount = 0;
+  static uint32_t samples[MAX_SAMPLES] = {0};
+  static uint16_t sampleIndex = 0;
+  static uint16_t sampleCount = 0;
+  static uint32_t sampleAvg = 0;
+  uint32_t nextSample = 0;
+
+  // reading the capture register resets the interrupt, rounded to the nearest millisecond (we don't need greater accuracy!)
+  nextSample = (TCC0_REGS->TCC_CC[0] + (RPM_MS_FACTOR/2))/RPM_MS_FACTOR;
+ 
+  pulseCount++;
+  // on first pulse, start our count
+  if (pulseCount == START_PULSE)
+  {
+    TCC0_REGS->TCC_COUNT = 0;
+  }
+  // on every third count we have another sample to record
+  if (pulseCount == END_PULSE)
+  {
+    // replace oldest value with newest for the running averaging
+    sampleAvg -= samples[sampleIndex];
+    // fan data sheet indicates this is the conversion to perform after every 3 positive edges
+    samples[sampleIndex] = 60000/nextSample;
+    sampleAvg += samples[sampleIndex];
+    sampleIndex = (sampleIndex+1)%numSamples;
+  
+    // stop counting after we have full history
+    if (sampleCount < numSamples)
+      sampleCount++;
+
+    fanRPM = sampleAvg/sampleCount;
+
+    // now we can use the last edge as the first for our next sample!
+    pulseCount = START_PULSE;
+    TCC0_REGS->TCC_COUNT = 0;
+  }
+}
+
+void startSampling()
+{
+  uint8_t message[2];
+
+  if (activeSensors[TEMP_HUMIDITY])
+  {
+    twiActivate(TEMP_BAUD);
+
+    message[0] = TEMP_ART_MSB;
+    message[1] = TEMP_ART_LSB;
+    twiWriteBytes(TEMP_SENSOR_ADDR, message, 2, false);
+
+    twiDeactivate();
+  }
+}
+
+// for future reference when connecting sensor: clock is yellow, data is white
+// values returned are *10 for greater fixed point precision
+void sampleTempAndHumidity()
+{
+  uint16_t readingT = 0;
+  uint16_t readingH = 0;
+  uint8_t message[8];
+
+  if (activeSensors[TEMP_HUMIDITY])
+  {
+    twiActivate(TEMP_BAUD);
+
+    // tell sensor we're about to read
+    message[0] = TEMP_READ_MSB;
+    message[1] = TEMP_READ_LSB;
+    twiWriteBytes(TEMP_SENSOR_ADDR, message, 2, false);
+
+    // start a read of the data
+    twiReadBytes(TEMP_SENSOR_ADDR, message, 5);
+
+    readingT = message[0];
+    readingT <<= 8;
+    readingT |= message[1];
+    // ignore the CRC for now..
+    readingH = message[3];
+    readingH <<= 8;
+    readingH |= message[4];
+    // ignore the CRC for now..
+
+    avgTemperature = ((1750UL*readingT)/65535UL)-450UL;
+    avgHumidity = ((1000UL*readingH)/65535L);
+
+    // TODO add CRC check to throw out bad data
+
+    // we're done with this sample set so tell the sensor to stop (don't know why...)
+    message[0] = TEMP_BREAK_MSB;
+    message[1] = TEMP_BREAK_LSB;
+    twiWriteBytes(TEMP_SENSOR_ADDR, message, 2, false);
+
+    twiDeactivate();
+
+    // start the next sample so it's ready for our next read
+    startSampling();
+  }
+}
+
+void analogInit()
+{
+  if (activeSensors[RAW_ANALOG])
+  {
+    // light sensor on PB3, configured as an analog input on ADC0 (AIN[15])
+    PORT_REGS->GROUP[1].PORT_DIRCLR = PORT_PB03;
+    PORT_REGS->GROUP[1].PORT_PINCFG[3] = PORT_PINCFG_PMUXEN_Msk;
+    PORT_REGS->GROUP[1].PORT_PMUX[1] = PORT_PMUX_PMUXO_B;
+  }
+
+  if (activeSensors[MAGNET_DISTANCE])
+  { 
+    // LIN hall sensor on PB8, configured as an analog input on ADC0 (AIN[2])
+    PORT_REGS->GROUP[1].PORT_DIRCLR = PORT_PB08;
+    PORT_REGS->GROUP[1].PORT_PINCFG[8] = PORT_PINCFG_PMUXEN_Msk;
+    PORT_REGS->GROUP[1].PORT_PMUX[4] = PORT_PMUX_PMUXE_B;
+
+    // keep the LIN sensor enabled
+    PORT_REGS->GROUP[1].PORT_DIRSET = PORT_PB06;
+    PORT_REGS->GROUP[1].PORT_OUTSET = PORT_PB06;
+  }
+
+  // use generic clock 5 as our clock for this device, running at 24MHz to make sure we get reasonable sampling rates
+  GCLK_REGS->GCLK_GENCTRL[5] = GCLK_GENCTRL_DIV(2) | GCLK_GENCTRL_SRC_DFLL | GCLK_GENCTRL_GENEN_Msk;
+  while((GCLK_REGS->GCLK_SYNCBUSY & GCLK_SYNCBUSY_GENCTRL_GCLK5) == GCLK_SYNCBUSY_GENCTRL_GCLK5)
+    ;/* Wait for synchronization */
+
+  // have to enable the peripheral clocks I need via the generic and main clocks
+  // see page 156 of data sheet for GCLK array offsets
+  GCLK_REGS->GCLK_PCHCTRL[40] = GCLK_PCHCTRL_GEN(5) | GCLK_PCHCTRL_CHEN_Msk;
+  MCLK_REGS->MCLK_APBDMASK |= MCLK_APBDMASK_ADC0_Msk;
+
+  SUPC_REGS->SUPC_VREF = SUPC_VREF_SEL_2V5;
+
+  ADC0_REGS->ADC_CTRLA = ADC_CTRLA_ENABLE_Msk;
+  while((ADC0_REGS->ADC_SYNCBUSY) != 0)
+    ;// Wait for synchronization
+}
+
+// take a reading and include it in our averaging to maintain a stable analog reading
+#define NUM_SAMPLES  32
+void sampleAnalog()
+{ 
+  if (activeSensors[RAW_ANALOG])
+  {
+    static uint16_t samples[NUM_SAMPLES];
+    static uint16_t sample_index = 0;
+    
+    uint16_t value = 0;
+    uint16_t volts;
+    
+    // initialize the sample array...
+    if (num_analog_samples == 0)
+    {
+      int i;
+      
+      for (i=0; i<NUM_SAMPLES; i++)
+        samples[i] = 0;
+    }
+    
+    // clear all flags
+    ADC0_REGS->ADC_INTFLAG = 0x07;
+
+    // activate the light sensor's channel
+    ADC0_REGS->ADC_INPUTCTRL = ADC_INPUTCTRL_MUXPOS(15);
+
+    // initiate a sample
+    ADC0_REGS->ADC_SWTRIG = ADC_SWTRIG_START_Msk;
+    
+    // wait for the sample to finish by checking the interrupt flag
+    while ( (ADC0_REGS->ADC_INTFLAG & ADC_INTFLAG_RESRDY_Msk) == 0)
+      ;
+    
+    value = ADC0_REGS->ADC_RESULT;
+
+    // based on 12 bits of resolution and a 2.5V reference (multiplied by 1000 for greater precision)
+    volts = (value * 2500UL) / 4096UL;
+    
+    // replace oldest value with newest for the running averaging
+    avg_analog -= samples[sample_index];
+    samples[sample_index] = volts;
+    avg_analog += samples[sample_index];
+    sample_index = (sample_index+1)%NUM_SAMPLES;
+    
+    // stop counting after we have full history
+    if ( num_analog_samples < NUM_SAMPLES )
+      num_analog_samples++;
+  }
+}
+
+#define NUM_HALL_SAMPLES 8
+void sampleHall()
+{
+  if (activeSensors[MAGNET_DISTANCE])
+  {  
+    static uint16_t samples[NUM_HALL_SAMPLES];
+    static uint16_t sample_index = 0;
+    
+    uint16_t value = 0;
+    uint16_t volts;
+    
+    // initialize the sample array...
+    if (num_hall_samples == 0)
+    {
+      int i;
+      
+      for (i=0; i<NUM_HALL_SAMPLES; i++)
+        samples[i] = 0;
+    }
+    
+    // clear all flags
+    ADC0_REGS->ADC_INTFLAG = 0x07;
+
+    // activate the hall sensor's channel
+    ADC0_REGS->ADC_INPUTCTRL = ADC_INPUTCTRL_MUXPOS(2);
+
+    // initiate a sample
+    ADC0_REGS->ADC_SWTRIG = ADC_SWTRIG_START_Msk;
+    
+    // wait for the sample to finish by checking the interrupt flag
+    while ( (ADC0_REGS->ADC_INTFLAG & ADC_INTFLAG_RESRDY_Msk) == 0)
+      ;
+    
+    value = ADC0_REGS->ADC_RESULT;
+
+    // based on 12 bits of resolution and a 2.5V reference (multiplied by 1000 for greater precision)
+    volts = (value * 2500UL) / 4096UL;
+    
+    // replace oldest value with newest for the running averaging
+    avg_hall -= samples[sample_index];
+    samples[sample_index] = volts;
+    avg_hall += samples[sample_index];
+    sample_index = (sample_index+1)%NUM_HALL_SAMPLES;
+    
+    // stop counting after we have full history
+    if ( num_hall_samples < NUM_HALL_SAMPLES )
+      num_hall_samples++;
+  }
+}
+
+uint16_t analogReading()
+{
+  uint16_t reading = 0;
+  if (activeSensors[RAW_ANALOG])
+    reading = ((avg_analog/num_analog_samples)+5)/10;
+
+  return reading;
+}
+
+uint16_t hallReading()
+{
+  uint16_t reading = 0;
+  if (activeSensors[MAGNET_DISTANCE])
+    reading = avg_hall/num_hall_samples;
+
+  return reading;
+}
+
+void fillTemperatureData(uint8_t *data)
+{
+  data[0] = avgTemperature>>24;
+  data[1] = (avgTemperature>>16) & 0x000000ff;
+  data[2] = (avgTemperature>>8) & 0x000000ff;
+  data[3] = avgTemperature & 0x000000ff;
+}
+
+void fillHumidityData(uint8_t *data)
+{
+  data[0] = avgHumidity>>24;
+  data[1] = (avgHumidity>>16) & 0x000000ff;
+  data[2] = (avgHumidity>>8) & 0x000000ff;
+  data[3] = avgHumidity & 0x000000ff;
+}
+
+void fillAnalogData(uint8_t *data)
+{
+  uint16_t rawAnalog = analogReading();
+  data[0] = rawAnalog>>8;
+  data[1] = rawAnalog & 0x00ff;
+}
+
+void fillMagnetDistanceData(uint8_t *data)
+{
+  uint16_t distance = hallReading();
+  data[0] = distance>>8;
+  data[1] = distance & 0x00ff;
+}
+
+void fillFanRPMData(uint8_t *data)
+{
+  data[0] = fanRPM>>24;
+  data[1] = (fanRPM>>16) & 0x000000ff;
+  data[2] = (fanRPM>>8) & 0x000000ff;
+  data[3] = fanRPM & 0x000000ff;
+}
+
+void checkForMsg()
+{
+  Packet msg;
+
+  msg.deviceID = requestMsg[0];
+  msg.typeID = requestMsg[1];
+  msg.sensorID = requestMsg[2];
+
+  if (msg.typeID == MSG_COMMAND)
+  {
+    if (msg.sensorID == FAN_RPM)
+    {
+      // the next byte is the new duty cycle for the fan
+      updateFan(requestMsg[3]);
+    }
+  }
+
+  // make sure we only respond to requests that we can handle, and only those meant for us
+  else if (msg.typeID == MSG_REQUEST && activeSensors[msg.sensorID] && (msg.deviceID == ALL_DEVICES || msg.deviceID == myID))
+  {
+    // clear the data buffer to avoid leaking data due to reuse
+    for (int i=0; i<PROTOCOL_DATA_BYTES; i++)
+      msg.data[i] = 0;
+
+    // NOTE: using the last reading instead of polling *right now*
+
+    if (msg.sensorID == TEMP_HUMIDITY)
+    {
+      fillTemperatureData((uint8_t *)&msg.data[0]);
+      fillHumidityData((uint8_t *)&msg.data[4]);
+    }
+
+    else if (msg.sensorID == RAW_ANALOG)
+      fillAnalogData((uint8_t *)&msg.data[0]);
+
+    else if (msg.sensorID == MAGNET_DISTANCE)
+      fillMagnetDistanceData((uint8_t *)&msg.data[0]);
+
+    else if (msg.sensorID == FAN_RPM)
+      fillFanRPMData((uint8_t *)&msg.data[0]);
+
+    msg.typeID = MSG_REPLY;
+    CANSendBytes((uint8_t *)&msg, PROTOCOL_PACKET_SIZE);
+  }
+}
+
+void sendBroadcastMessage()
+{
+  uint8_t sensorMask = 0;
+
+  for (int i=0; i<PROTOCOL_DATA_BYTES; i++)
+    broadcastMsg.data[i] = 0;
+
+  for (int nextSensor=0; nextSensor<NUM_SENSORS; nextSensor++)
+  {
+    if (activeSensors[nextSensor])
+    {
+      switch (nextSensor)
+      {
+        case TEMP_HUMIDITY:
+          fillTemperatureData((uint8_t *)&broadcastMsg.data[TEMPERATURE_OFFSET]);
+          sensorMask |= TEMPERATURE_DATA_MASK;
+          fillHumidityData((uint8_t *)&broadcastMsg.data[HUMIDITY_OFFSET]);
+          sensorMask |= HUMIDITY_DATA_MASK;
+          break;
+
+        case RAW_ANALOG:
+          fillAnalogData((uint8_t *)&broadcastMsg.data[ANALOG_OFFSET]);
+          sensorMask |= ANALOG_DATA_MASK;
+          break;
+
+        case MAGNET_DISTANCE:
+          fillMagnetDistanceData((uint8_t *)&broadcastMsg.data[MAGNET_DISTANCE_OFFSET]);
+          sensorMask |= MAGNET_DISTANCE_MASK;
+          break;
+
+        case FAN_RPM:
+          fillFanRPMData((uint8_t *)&broadcastMsg.data[FAN_RPM_OFFSET]);
+          sensorMask |= FAN_RPM_DATA_MASK;
+          break;
+      }
+    }
+  }
+
+  broadcastMsg.deviceID = myID;
+  broadcastMsg.typeID = MSG_BROADCAST;
+  broadcastMsg.sensorID = sensorMask;
+
+  uint8_t retries = 0;
+  while (retries<4 && !CANSendBytes((uint8_t *)&broadcastMsg, PROTOCOL_PACKET_SIZE))
+    retries++;
+}
+
+int main(void)
+{
+#ifndef NDEBUG
+  for (int i=0; i<100000; i++)
+  ;
+#endif
+#define NEXT_TASK_MS 50UL
+#define NUM_TASKS    6
+  // scheduling for reading all attached sensors; making sure the raw analog is read consistently to give a stable sampling
+  Task readingTasks[NUM_TASKS] = {sampleAnalog, sampleHall, sampleAnalog, sampleTempAndHumidity, sampleAnalog, sampleHall};
+  uint8_t currTask = 0;
+
+  uint32_t msCount = 0;
+
+  // NOTE: the silkscreen on the curiosity board is WRONG! it's PB4 and PB5 NOT PA4 and PA5 (for CS 3 and 2!)
+
+  // LED output
+  PORT_REGS->GROUP[0].PORT_DIRSET = PORT_PA14;
+  PORT_REGS->GROUP[0].PORT_OUTSET = PORT_PA14;
+
+  // sleep to idle (wake on interrupts)
+  PM_REGS->PM_SLEEPCFG = PM_SLEEPCFG_SLEEPMODE_IDLE;
+  
+  loadParameters();
+  analogInit();
+  twiInit();
+  rpmInit();
+  fanInit();
+  CANInit((uint8_t *)requestMsg, PROTOCOL_PACKET_SIZE, checkForMsg);
+  heartInit();
+
+  // get the temperature sensor started so we have data when we need it
+  startSampling();
+
+  // we want interrupts!
+  __enable_irq();
+
+  // sleep until we have an interrupt
+  while (1) 
+  {
+    __WFI();
+
+    msCount = elapsedMS();
+
+    if ((msCount % LED_FLASH_MS) == 0)
+      PORT_REGS->GROUP[0].PORT_OUTTGL = PORT_PA14;
+
+    if ((msCount % (LOAD_BROADCAST_MS*broadcastMultiplier)) == 0)
+      sendBroadcastMessage();
+
+    if ((msCount % NEXT_TASK_MS) == 0)
+    {
+      // make sure all writes to our shared sensor vars are atomic; coarse grained locking is fine
+      readingTasks[currTask]();
+      currTask = (currTask+1)%NUM_TASKS;
+    }
+  }
+}
