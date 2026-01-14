@@ -2,12 +2,20 @@
 
 #define CS_PIN PORT_PA18;
 
-uint32_t *messageRam = NULL;
+// FIFO elements will be two 32-bit rows of "metadata" and two 32-bit rows of data
+#define RX_FIFO_ELEMENT_SIZE 128 // bits
+#define RX_FIFO_ELEMENT_DATA_INC 64 // bits
 
-void canInit(uint32_t *messageRamStart, uint32_t *rxFifoStart, uint32_t *txBufStart, uint32_t *extendedFilterListStart, uint32_t extendedFilterListCount)
+uint32_t *messageRam = NULL;
+uint32_t *rxFifo = NULL;
+void (*callback)(uint8_t *) = NULL;
+
+void canInit(uint32_t *messageRamStart, uint32_t *rxFifoStart, uint32_t *txBufStart, uint32_t *extendedFilterListStart, uint32_t extendedFilterListCount, canCallback rxCallback)
 {
-  // save message RAM start
+  // save necessary pointers 
   messageRam = messageRamStart;
+  rxFifo = rxFifoStart;
+  callback = rxCallback;
 
   // configure main clock
   MCLK_REGS->MCLK_APBAMASK |= MCLK_AHBMASK_CAN0_Msk;
@@ -51,6 +59,15 @@ void canInit(uint32_t *messageRamStart, uint32_t *rxFifoStart, uint32_t *txBufSt
   // configure Rx FIFO element size
   CAN1_REGS->CAN_RXESC = CAN_RXESC_F0DS_DATA8;
 
+  // enable Rx FIFO new message interrupt
+  CAN1_REGS->CAN_IE = CAN_IE_RF0NE_Msk;
+  
+  // enable FIFO interrupt line 0
+  CAN1_REGS->CAN_ILE = CAN_ILE_EINT0_Msk;
+
+  // enable interrupts for CAN1
+  NVIC_EnableIRQ(CAN1_IRQn);
+
   // configure Tx Buffer
   CAN1_REGS->CAN_TXBC = CAN_TXBC_TBSA(txBufStart);
 
@@ -61,7 +78,30 @@ void canInit(uint32_t *messageRamStart, uint32_t *rxFifoStart, uint32_t *txBufSt
   while((CAN1_REGS->CAN_CCCR & CAN_CCCR_CCE_Msk) != 0);
 }
 
-void canSend(uint8_t *bytes)
+void canSend(uint32_t mask)
 {
+  // do a send of all transmit buffers defined in the passed mask
+  CAN1_REGS->CAN_TXBAR = mask;
+}
 
+void CAN1_Handler()
+{
+  if((CAN1_REGS->CAN_IR & CAN_IR_RF0N_Msk) != 0)
+  {
+    // clear interrupt
+    CAN1_REGS->CAN_IR = CAN_IR_RF0N_Msk;
+
+    // get the index of the next element to receive
+    uint32_t getIndex = (CAN1_REGS->CAN_RXF0S & CAN_RXF0S_F0GI_Msk);
+    
+    // set acknowledge of receive
+    CAN1_REGS->CAN_RXF0A = getIndex;
+  
+    // compute the start location of the FIFO element data
+    uint8_t *getPointer = (uint8_t *)(rxFifo + (getIndex * RX_FIFO_ELEMENT_SIZE));
+    getPointer += RX_FIFO_ELEMENT_DATA_INC;
+  
+    // invoke callback function and pass received data
+    callback(getPointer);
+  }
 }
