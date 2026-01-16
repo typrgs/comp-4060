@@ -11,7 +11,7 @@ void heartInit()
   NVIC_EnableIRQ(SysTick_IRQn);
 }
 
-uint32_t elapsedMs()
+uint32_t elapsedMS()
 {
   return msCount;
 }
