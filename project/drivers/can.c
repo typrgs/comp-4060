@@ -6,23 +6,23 @@
 #define RX_FIFO_ELEMENT_SIZE 128 // bits
 #define RX_FIFO_ELEMENT_DATA_INC 64 // bits
 
-uint32_t *messageRam = NULL;
 uint32_t *rxFifo = NULL;
-void (*callback)(uint8_t *) = NULL;
+uint8_t *rxBytes = NULL;
+canCallback callback = NULL;
 
-void canInit(uint32_t *messageRamStart, uint32_t *rxFifoStart, uint32_t *txBufStart, uint32_t *extendedFilterListStart, uint32_t extendedFilterListCount, canCallback rxCallback)
+void canInit(uint32_t *rxFifoStart, uint32_t *txBufStart, uint32_t *extendedFilterListStart, uint32_t extendedFilterListCount, uint8_t *buf, canCallback rxCallback)
 {
   // save necessary pointers 
-  messageRam = messageRamStart;
   rxFifo = rxFifoStart;
+  rxBytes = buf;
   callback = rxCallback;
 
   // configure main clock
-  MCLK_REGS->MCLK_APBAMASK |= MCLK_AHBMASK_CAN0_Msk;
+  MCLK_REGS->MCLK_AHBMASK |= MCLK_AHBMASK_CAN1_Msk;
 
   // configure generic clock
-  GCLK_REGS->GCLK_GENCTRL[5] = GCLK_GENCTRL_GENEN_Msk | GCLK_GENCTRL_SRC_DFLL | GCLK_GENCTRL_DIV(8); // div 8 for 8MHz clock
-  GCLK_REGS->GCLK_PCHCTRL[27] = GCLK_PCHCTRL_CHEN_Msk | GCLK_PCHCTRL_GEN(5);
+  GCLK_REGS->GCLK_GENCTRL[5] = GCLK_GENCTRL_GENEN_Msk | GCLK_GENCTRL_SRC_DFLL | GCLK_GENCTRL_DIV(6); // div 6 for 8MHz clock
+  GCLK_REGS->GCLK_PCHCTRL[28] = GCLK_PCHCTRL_CHEN_Msk | GCLK_PCHCTRL_GEN(5);
 
   // configure IO lines for CAN controller to output to CAN transceiver
   PORT_REGS->GROUP[1].PORT_PMUX[6] |= PORT_PMUX_PMUXE_H;
@@ -31,8 +31,8 @@ void canInit(uint32_t *messageRamStart, uint32_t *rxFifoStart, uint32_t *txBufSt
   PORT_REGS->GROUP[1].PORT_PINCFG[13] = PORT_PINCFG_PMUXEN_Msk;
 
   // setup CAN Click GPIO pins to set standard mode
-  PORT_REGS->GROUP[1].PORT_DIRSET = CS_PIN;
-  PORT_REGS->GROUP[1].PORT_OUTCLR = CS_PIN;
+  PORT_REGS->GROUP[0].PORT_DIRSET = CS_PIN;
+  PORT_REGS->GROUP[0].PORT_OUTCLR = CS_PIN;
 
   // set init bit
   CAN1_REGS->CAN_CCCR = CAN_CCCR_INIT_Msk;
@@ -41,11 +41,14 @@ void canInit(uint32_t *messageRamStart, uint32_t *rxFifoStart, uint32_t *txBufSt
   // enable configuration change
   CAN1_REGS->CAN_CCCR |= CAN_CCCR_CCE_Msk;
 
+  // set DBTP register to reset value
+  CAN1_REGS->CAN_DBTP = CAN_DBTP_RESETVALUE;
+
   // set NBTP register to reset value
   CAN1_REGS->CAN_NBTP = CAN_NBTP_RESETVALUE;
 
   // set global filter configuration
-  CAN1_REGS->CAN_GFC = CAN_GFC_ANFE_REJECT; // reject any non-matching frames
+  CAN1_REGS->CAN_GFC = CAN_GFC_ANFE_RXF0; // reject any non-matching frames
 
   // set extended ID filter configuration
   CAN1_REGS->CAN_XIDFC = CAN_XIDFC_LSE(extendedFilterListCount) | CAN_XIDFC_FLESA(extendedFilterListStart);
@@ -69,19 +72,29 @@ void canInit(uint32_t *messageRamStart, uint32_t *rxFifoStart, uint32_t *txBufSt
   NVIC_EnableIRQ(CAN1_IRQn);
 
   // configure Tx Buffer
-  CAN1_REGS->CAN_TXBC = CAN_TXBC_TBSA(txBufStart);
+  CAN1_REGS->CAN_TXBC = CAN_TXBC_NDTB(1) | CAN_TXBC_TBSA(txBufStart);
 
   // configure Tx Buffer element size
   CAN1_REGS->CAN_TXESC = CAN_TXESC_TBDS_DATA8;
 
-  CAN1_REGS->CAN_CCCR = 0;
-  while((CAN1_REGS->CAN_CCCR & CAN_CCCR_CCE_Msk) != 0);
+  // SET TEST MODE
+  CAN1_REGS->CAN_CCCR |= CAN_CCCR_TEST_Msk;
+
+  // SET INTERNAL LOOPBACK
+  CAN1_REGS->CAN_TEST = CAN_TEST_LBCK_Msk;
+  CAN1_REGS->CAN_CCCR |= CAN_CCCR_MON_Msk;
+
+  CAN1_REGS->CAN_CCCR &= ~CAN_CCCR_INIT_Msk;
+  while((CAN1_REGS->CAN_CCCR & CAN_CCCR_INIT_Msk) != 0);
 }
 
 void canSend(uint32_t mask)
 {
   // do a send of all transmit buffers defined in the passed mask
   CAN1_REGS->CAN_TXBAR = mask;
+  
+  // wait for all transmits to finish
+  while((CAN1_REGS->CAN_TXBRP & CAN_TXBRP_Msk) != 0);
 }
 
 void CAN1_Handler()
@@ -97,11 +110,22 @@ void CAN1_Handler()
     // set acknowledge of receive
     CAN1_REGS->CAN_RXF0A = getIndex;
   
-    // compute the start location of the FIFO element data
-    uint8_t *getPointer = (uint8_t *)(rxFifo + (getIndex * RX_FIFO_ELEMENT_SIZE));
-    getPointer += RX_FIFO_ELEMENT_DATA_INC;
+    // compute the start location of the FIFO element 
+    uint32_t *wordPointer = (rxFifo + (getIndex * RX_FIFO_ELEMENT_SIZE));
+
+    // mask out data length
+    uint8_t dataLength = wordPointer[1] & 0x000F0000;
+
+    // get pointer to start of data section
+    uint8_t *bytePointer = (uint8_t *)(wordPointer + RX_FIFO_ELEMENT_DATA_INC);
+
+    // copy data to receive buffer
+    for(int i=0; i<dataLength; i++)
+    {
+      rxBytes[i] = bytePointer[i];
+    }
   
     // invoke callback function and pass received data
-    callback(getPointer);
+    callback(dataLength);
   }
 }
