@@ -13,14 +13,10 @@
 
 #define CRC_INIT_SEED 0xFFFFFFFF
 
-#define TC0_INIT_VALUE 41536
-
 uint8_t *asyncBuf = NULL;
 uint8_t asyncBufPos = 0;
 uartCANCallback asyncDone = NULL;
 uint8_t asyncSize = 0;
-
-uint16_t tcOvfCount = 0;
 
 typedef enum RX_RESULT
 {
@@ -56,44 +52,6 @@ RxState rxEnd(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedS
 // state function array
 RxState (*rxStates[NUM_STATES])(uint8_t, uint8_t *, uint8_t *, uint8_t) = {rxIdle, rxSearch, rxStart, rxStuff, rxData, rxEnd};
 
-void tc0Init()
-{
-  // enables main clock to TC0 over advanced peripheral bus
-  MCLK_REGS->MCLK_APBAMASK |= MCLK_APBAMASK_TC0_Msk;
-
-  // enables generic clock 5 to TC0 over peripheral channel
-  GCLK_REGS->GCLK_PCHCTRL[9] = GCLK_PCHCTRL_CHEN_Msk | GCLK_PCHCTRL_GEN(5);
-
-  // set data register for timing
-  // by default, we have a 16-bit timer clocked at 24MHz
-  // the timer overflows every 65536 ticks
-  // we set the data register value of the timer to 41536 so it overflows every 1ms
-  TC0_REGS->COUNT16.TC_COUNT = TC0_INIT_VALUE;
-  
-  // enable the overflow interrupt
-  TC0_REGS->COUNT16.TC_INTENSET |= TC_INTENSET_OVF_Msk;
-  
-  // set higher priority than SERCOM0 RXC interrupt
-  NVIC_SetPriority(TC0_IRQn, 5);
-
-  // now we enable TC0 interrupts
-  NVIC_EnableIRQ(TC0_IRQn);
-}
-
-void tc0Enable()
-{
-  TC0_REGS->COUNT16.TC_COUNT = TC0_INIT_VALUE;
-  tcOvfCount = 0;
-
-  // enable timer
-  TC0_REGS->COUNT16.TC_CTRLA |= TC_CTRLA_ENABLE_Msk;
-  while((TC0_REGS->COUNT16.TC_SYNCBUSY & TC_SYNCBUSY_ENABLE_Msk) == TC_SYNCBUSY_ENABLE_Msk);
-}
-
-void tc0Disable()
-{
-  TC0_REGS->COUNT16.TC_CTRLA = 0;
-}
 
 void uartCANInit(uint8_t *data, uint8_t expectedSize, uartCANCallback done)
 {
@@ -176,12 +134,22 @@ static uint16_t crcResult()
   return (uint16_t)DMAC_REGS->DMAC_CRCCHKSUM;
 }
 
-void TC0_Handler()
+static void transmitByte(uint8_t byte)
 {
-  TC0_REGS->COUNT16.TC_INTFLAG = TC_INTFLAG_OVF_Msk;
+  SERCOM0_REGS->USART_INT.SERCOM_DATA = byte;
+  while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
+}
 
-  TC0_REGS->COUNT16.TC_COUNT = TC0_INIT_VALUE;
-  tcOvfCount++;
+static void doCarrierSensing()
+{
+  uint32_t rejectData;
+
+  // wait for data
+  while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_RXC_Msk) != 0)
+    rejectData = SERCOM0_REGS->USART_INT.SERCOM_DATA;
+  
+  (void) rejectData;
+  SERCOM0_REGS->USART_INT.SERCOM_STATUS = 0xFF;
 }
 
 void uartCANSendBytes(uint8_t const * const bytes, uint16_t size)
@@ -192,30 +160,7 @@ void uartCANSendBytes(uint8_t const * const bytes, uint16_t size)
     SERCOM0_REGS->USART_INT.SERCOM_INTENCLR = SERCOM_USART_INT_INTENCLR_RXC_Msk;
   }
 
-  // start timer for carrier sensing timeout
-  tc0Enable();
-
-  // do carrier sensing
-  while(tcOvfCount < TX_POLL_TIMEOUT)
-  {
-    // wait for data
-    while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_RXC_Msk) == 0 && tcOvfCount < TX_POLL_TIMEOUT);
-  
-    // receive data
-    uint32_t data = SERCOM0_REGS->USART_INT.SERCOM_DATA;
-    (void) data;
-    SERCOM0_REGS->USART_INT.SERCOM_STATUS = 0xFF;
-  
-    // reset timeout
-    if(tcOvfCount < TX_POLL_TIMEOUT)
-    {
-      TC0_REGS->COUNT16.TC_COUNT = 0;
-      tcOvfCount = 0;
-    }
-  }
-
-  // stop timer for carrier sensing timeout
-  tc0Disable();
+  doCarrierSensing();
 
   // switch to TX mode in CTRLB
   SERCOM0_REGS->USART_INT.SERCOM_CTRLB = SERCOM_USART_INT_CTRLB_TXEN_Msk;
@@ -239,13 +184,11 @@ void uartCANSendBytes(uint8_t const * const bytes, uint16_t size)
     // stuff a byte if equal to the sentinel
     if(bytes[i] == SENTINEL)
     {
-      SERCOM0_REGS->USART_INT.SERCOM_DATA = SENTINEL;
-      while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
+      transmitByte(SENTINEL);
     }
 
-    SERCOM0_REGS->USART_INT.SERCOM_DATA = bytes[i];
     crcNextByte(bytes[i]);
-    while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
+    transmitByte(bytes[i]);
   }
 
   // if the given bytes is smaller than a packet, transmit 0x00 to fill in remaining bytes
@@ -253,9 +196,8 @@ void uartCANSendBytes(uint8_t const * const bytes, uint16_t size)
   {
     for(uint16_t i=0; i<(PROTOCOL_PACKET_SIZE - size); i++)
     {
-      SERCOM0_REGS->USART_INT.SERCOM_DATA = 0;
       crcNextByte(0);
-      while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
+      transmitByte(0);
     }
   }
 
@@ -265,26 +207,19 @@ void uartCANSendBytes(uint8_t const * const bytes, uint16_t size)
   // make sure to stuff sentinel bytes if CRC bytes are equal to sentinel
   if((crc >> 8) == SENTINEL)
   {
-    SERCOM0_REGS->USART_INT.SERCOM_DATA = SENTINEL;
-    while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
+    transmitByte(SENTINEL);
   }
-  SERCOM0_REGS->USART_INT.SERCOM_DATA = (uint8_t)(crc >> 8);
-  while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
+  transmitByte((uint8_t)(crc >> 8));
 
   if((crc & 0x00FF) == SENTINEL)
   {
-    SERCOM0_REGS->USART_INT.SERCOM_DATA = SENTINEL;
-    while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
+    transmitByte(SENTINEL);
   }
-  SERCOM0_REGS->USART_INT.SERCOM_DATA = (uint8_t)(crc & 0x00FF);
-  while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
+  transmitByte((uint8_t)(crc & 0x00FF));
 
   // transmit frame end byte sequence
-  SERCOM0_REGS->USART_INT.SERCOM_DATA = SENTINEL;
-  while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
-  
-  SERCOM0_REGS->USART_INT.SERCOM_DATA = FRAME_END;
-  while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_TXC_Msk) == 0);
+  transmitByte(SENTINEL);
+  transmitByte(FRAME_END);
 
   // make sure everything finishes sending
   while((SERCOM0_REGS->USART_INT.SERCOM_INTFLAG & SERCOM_USART_INT_INTFLAG_DRE_Msk) == 0);
