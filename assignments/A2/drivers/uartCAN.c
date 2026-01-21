@@ -108,9 +108,6 @@ void uartCANInit(uint8_t *data, uint8_t expectedSize, uartCANCallback done)
   
   // set baud to 0
   SERCOM0_REGS->USART_INT.SERCOM_BAUD = 0;
-
-  // init timer to use when doing async receives
-  tc0Init();
 }
 
 static void crcInit()
