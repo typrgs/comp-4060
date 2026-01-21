@@ -9,8 +9,6 @@
 
 #define CS_PIN PORT_PB05
 
-#define TX_POLL_TIMEOUT 50 // ms
-
 #define CRC_INIT_SEED 0xFFFFFFFF
 
 uint8_t *asyncBuf = NULL;
