@@ -2,10 +2,6 @@
 
 #define CS_PIN PORT_PA18;
 
-// FIFO elements will be two 32-bit rows of "metadata" and two 32-bit rows of data
-#define RX_FIFO_ELEMENT_SIZE 128 // bits
-#define RX_FIFO_ELEMENT_DATA_INC 64 // bits
-
 uint32_t *rxFifo = NULL;
 uint8_t *rxBytes = NULL;
 canCallback callback = NULL;
@@ -112,6 +108,9 @@ void CAN1_Handler()
     // get pointer to FIFO element 
     uint32_t *wordPointer = &rxFifo[getIndex*4];
 
-    dbg_write_u32(wordPointer, 4);
+    // get pointer to data section
+    uint8_t *bytePointer = (uint8_t *)(&wordPointer[2]);
+
+    dbg_write_u8(bytePointer, 8);
   }
 }
