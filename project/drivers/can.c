@@ -6,7 +6,7 @@ uint32_t *rxFifo = NULL;
 uint8_t *rxBytes = NULL;
 canCallback callback = NULL;
 
-void canInit(uint32_t *rxFifoStart, uint32_t *txBufStart, uint32_t *extendedFilterListStart, uint32_t extendedFilterListCount, uint8_t *buf, canCallback rxCallback)
+void canInit(uint32_t *rxFifoStart, uint32_t *txBufStart, uint32_t *extendedFilterListStart, uint32_t rxFifoCount, uint32_t txBufCount, uint32_t extendedFilterListCount, uint8_t *buf, canCallback rxCallback)
 {
   // save necessary pointers 
   rxFifo = rxFifoStart;
@@ -53,7 +53,7 @@ void canInit(uint32_t *rxFifoStart, uint32_t *txBufStart, uint32_t *extendedFilt
   CAN1_REGS->CAN_XIDAM = CAN_XIDAM_RESETVALUE; // mask is not active when set to reset value
 
   // configure Rx FIFO 0
-  CAN1_REGS->CAN_RXF0C = CAN_RXF0C_F0S(1) | CAN_RXF0C_F0SA(rxFifoStart);
+  CAN1_REGS->CAN_RXF0C = CAN_RXF0C_F0S(rxFifoCount) | CAN_RXF0C_F0SA(rxFifoStart);
 
   // configure Rx FIFO element size
   CAN1_REGS->CAN_RXESC = CAN_RXESC_F0DS_DATA8;
@@ -68,7 +68,7 @@ void canInit(uint32_t *rxFifoStart, uint32_t *txBufStart, uint32_t *extendedFilt
   NVIC_EnableIRQ(CAN1_IRQn);
 
   // configure Tx Buffer
-  CAN1_REGS->CAN_TXBC = CAN_TXBC_NDTB(1) | CAN_TXBC_TBSA(txBufStart);
+  CAN1_REGS->CAN_TXBC = CAN_TXBC_NDTB(txBufCount) | CAN_TXBC_TBSA(txBufStart);
 
   // configure Tx Buffer element size
   CAN1_REGS->CAN_TXESC = CAN_TXESC_TBDS_DATA8;

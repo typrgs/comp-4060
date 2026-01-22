@@ -44,7 +44,7 @@ int main()
   txBufStart[2] = 0xFFFFFFFF;
   txBufStart[3] = 0xFFFFFFFF;
   
-  canInit(rxFifoStart, txBufStart, extendedFilterStart, EXTENDED_FILTER_COUNT, rxBuf, processMsg);
+  canInit(rxFifoStart, txBufStart, extendedFilterStart, RX_FIFO_ELEMENT_COUNT, TX_BUF_ELEMENT_COUNT, EXTENDED_FILTER_COUNT, rxBuf, processMsg);
   
   heartInit();
 
