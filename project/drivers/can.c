@@ -73,7 +73,7 @@ void canInit(uint32_t *rxFifoStart, uint32_t *txBufStart, uint32_t *extendedFilt
   // configure Tx Buffer element size
   CAN1_REGS->CAN_TXESC = CAN_TXESC_TBDS_DATA8;
 
-#if NDEF NDEBUG
+#if NDEBUG
   // SET TEST MODE
   CAN1_REGS->CAN_CCCR |= CAN_CCCR_TEST_Msk;
 
