@@ -1,6 +1,6 @@
 #include "can.h"
 
-#define CS_PIN PORT_PA18;
+#define CS_PIN PORT_PB05;
 
 uint32_t *rxFifo = NULL;
 uint8_t *rxBytes = NULL;
@@ -27,8 +27,8 @@ void canInit(uint32_t *rxFifoStart, uint32_t *txBufStart, uint32_t *extendedFilt
   PORT_REGS->GROUP[1].PORT_PINCFG[13] = PORT_PINCFG_PMUXEN_Msk;
 
   // setup CAN Click GPIO pins to set standard mode
-  PORT_REGS->GROUP[0].PORT_DIRSET = CS_PIN;
-  PORT_REGS->GROUP[0].PORT_OUTCLR = CS_PIN;
+  PORT_REGS->GROUP[1].PORT_DIRSET = CS_PIN;
+  PORT_REGS->GROUP[1].PORT_OUTCLR = CS_PIN;
 
   // set init bit
   CAN1_REGS->CAN_CCCR = CAN_CCCR_INIT_Msk;
@@ -44,7 +44,7 @@ void canInit(uint32_t *rxFifoStart, uint32_t *txBufStart, uint32_t *extendedFilt
   CAN1_REGS->CAN_NBTP = CAN_NBTP_RESETVALUE;
 
   // set global filter configuration
-  CAN1_REGS->CAN_GFC = CAN_GFC_ANFE_RXF0; // reject any non-matching frames
+  CAN1_REGS->CAN_GFC = CAN_GFC_ANFE_REJECT; // reject any non-matching frames
 
   // set extended ID filter configuration
   CAN1_REGS->CAN_XIDFC = CAN_XIDFC_LSE(extendedFilterListCount) | CAN_XIDFC_FLESA(extendedFilterListStart);
@@ -73,7 +73,7 @@ void canInit(uint32_t *rxFifoStart, uint32_t *txBufStart, uint32_t *extendedFilt
   // configure Tx Buffer element size
   CAN1_REGS->CAN_TXESC = CAN_TXESC_TBDS_DATA8;
 
-#if NDEBUG
+#ifndef DNDEBUG
   // SET TEST MODE
   CAN1_REGS->CAN_CCCR |= CAN_CCCR_TEST_Msk;
 
