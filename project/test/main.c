@@ -8,10 +8,6 @@
 
 #define WORD_SIZE 32 // bits
 
-#define EXTENDED_FILTER_WORDS 2 // 32-bit words
-#define RX_FIFO_ELEMENT_WORDS 4 // 32-bit words
-#define TX_BUF_ELEMENT_WORDS 4 // 32-bit words
-
 // setup message RAM for CAN
 #define EXTENDED_FILTER_SIZE EXTENDED_FILTER_COUNT * EXTENDED_FILTER_WORDS
 #define RX_FIFO_SIZE RX_FIFO_ELEMENT_COUNT * RX_FIFO_ELEMENT_WORDS
@@ -39,14 +35,14 @@ int main()
   __enable_irq();
 
   // setup extended filter
-  extendedFilterStart[0] = 0b0 | 0b0 | 0b1 | 0b00000000000000000000000000001; // store in FIFO 0 on match
-  extendedFilterStart[1] = 0b0 | 0b1 | 0b0 | 0b00000000000000000000000000001; // dual filter (but using same ID)
+  extendedFilterStart[0] = 0b00100000000000000000000000000001; // store in FIFO 0 on match
+  extendedFilterStart[1] = 0b01000000000000000000000000000001; // dual filter (but using same ID)
   
   // setup TX buffer element
-  txBufStart[0] = 0b11000000000000000000000000000001;
-  txBufStart[1] = (0x00 | 0b0 | 0b0 | 0b0 | 0b0 | 0x8 | 0x0000);
-  txBufStart[2] = (0xFF | 0xFF | 0xFF | 0xFF);
-  txBufStart[3] = (0x00 | 0x00 | 0x00 | 0x00);
+  txBufStart[0] = 0b01000000000000000000000000000001;
+  txBufStart[1] = 0b00000000000010000000000000000000;
+  txBufStart[2] = 0xFFFFFFFF;
+  txBufStart[3] = 0xFFFFFFFF;
   
   canInit(rxFifoStart, txBufStart, extendedFilterStart, EXTENDED_FILTER_COUNT, rxBuf, processMsg);
   

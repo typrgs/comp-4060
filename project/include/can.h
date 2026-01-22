@@ -2,7 +2,11 @@
 
 #include "common.h"
 
-#define RX_FIFO_ELEMENT_DATA_BYTES 8
+#define EXTENDED_FILTER_WORDS 2 // 32-bit words
+#define RX_FIFO_ELEMENT_WORDS 4 // 32-bit words
+#define TX_BUF_ELEMENT_WORDS 4 // 32-bit words
+
+#define RX_FIFO_ELEMENT_DATA_BYTES 8 // bytes
 
 typedef void (*canCallback)(uint8_t);
 
