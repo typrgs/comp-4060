@@ -110,22 +110,9 @@ void CAN1_Handler()
     // set acknowledge of receive
     CAN1_REGS->CAN_RXF0A = getIndex;
   
-    // compute the start location of the FIFO element 
-    uint32_t *wordPointer = (rxFifo + (getIndex * RX_FIFO_ELEMENT_SIZE));
+    // get pointer to FIFO element 
+    uint32_t *wordPointer = &rxFifo[getIndex*4];
 
-    // mask out data length
-    uint8_t dataLength = wordPointer[1] & 0x000F0000;
-
-    // get pointer to start of data section
-    uint8_t *bytePointer = (uint8_t *)(wordPointer + RX_FIFO_ELEMENT_DATA_INC);
-
-    // copy data to receive buffer
-    for(int i=0; i<dataLength; i++)
-    {
-      rxBytes[i] = bytePointer[i];
-    }
-  
-    // invoke callback function and pass received data
-    callback(dataLength);
+    dbg_write_u32(wordPointer, 4);
   }
 }

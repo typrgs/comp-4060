@@ -43,9 +43,9 @@ int main()
   extendedFilterStart[1] = 0b10000000000000000000000000000001;
   
   // setup TX buffer element
-  txBufStart[0] = 0b010000000000000000000000000001;
-  txBufStart[1] = (0x00 | 0b0 | 0b0 | 0b0 | 0x1 | 0x0000);
-  txBufStart[2] = 0x0000000F;
+  txBufStart[0] = 0b11000000000000000000000000000001;
+  txBufStart[1] = (0x00 | 0b0 | 0b0 | 0b0 | 0b0 | 0x1 | 0x0000);
+  txBufStart[2] = 0xF0 | 0x00 | 0x00 | 0xFF;
   
   canInit(rxFifoStart, txBufStart, extendedFilterStart, EXTENDED_FILTER_COUNT, rxBuf, processMsg);
   
