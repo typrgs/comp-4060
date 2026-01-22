@@ -114,7 +114,13 @@ void CAN1_Handler()
     uint8_t dlc = (uint8_t)((wordPointer[2] & 0xF0000) >> 0x10);
 
     // get pointer to data section
-    uint8_t *dataPointer = (uint8_t *)(&wordPointer[2]); 
+    uint8_t *dataPointer = (uint8_t *)(&wordPointer[2]);
+
+    // wipe data from last receive to avoid data leakage
+    for(int i=0; i<RX_FIFO_ELEMENT_DATA_BYTES; i++)
+    {
+      rxBytes[i] = 0;
+    }
 
     // copy data section to receive buffer
     for(int i=0; i<dlc; i++)
