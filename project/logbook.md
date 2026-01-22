@@ -18,3 +18,4 @@ Jan 22:
     - Acceptance filtering not matching messages for some reason, needs testing
   - Fixed issue with acceptance filtering! was building the elements incorrectly in memory, so I had garbage in those regions
   - Update CAN RX interrupt handler to invoke callback function properly.
+  - Added additional code to CAN init function to parameterize the RX FIFO element count and TX Buffer element count
