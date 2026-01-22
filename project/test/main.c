@@ -39,13 +39,14 @@ int main()
   __enable_irq();
 
   // setup extended filter
-  extendedFilterStart[0] = 0b00100000000000000000000000000001;
-  extendedFilterStart[1] = 0b10000000000000000000000000000001;
+  extendedFilterStart[0] = 0b0 | 0b0 | 0b1 | 0b00000000000000000000000000001; // store in FIFO 0 on match
+  extendedFilterStart[1] = 0b0 | 0b1 | 0b0 | 0b00000000000000000000000000001; // dual filter (but using same ID)
   
   // setup TX buffer element
   txBufStart[0] = 0b11000000000000000000000000000001;
-  txBufStart[1] = (0x00 | 0b0 | 0b0 | 0b0 | 0b0 | 0x1 | 0x0000);
-  txBufStart[2] = 0xF0 | 0x00 | 0x00 | 0xFF;
+  txBufStart[1] = (0x00 | 0b0 | 0b0 | 0b0 | 0b0 | 0x8 | 0x0000);
+  txBufStart[2] = (0xFF | 0xFF | 0xFF | 0xFF);
+  txBufStart[3] = (0x00 | 0x00 | 0x00 | 0x00);
   
   canInit(rxFifoStart, txBufStart, extendedFilterStart, EXTENDED_FILTER_COUNT, rxBuf, processMsg);
   
