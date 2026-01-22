@@ -17,3 +17,4 @@ Jan 22:
   - RX interrupt working! hardware configuration was incorrect. CAN transceiver needs to use the external UART pads with jumpers to PA12 and PA13. TX and RX pins on transceiver are flipped relative to bus slot, so using external pads allows me to flip them.
     - Acceptance filtering not matching messages for some reason, needs testing
   - Fixed issue with acceptance filtering! was building the elements incorrectly in memory, so I had garbage in those regions
+  - Update CAN RX interrupt handler to invoke callback function properly.
