@@ -44,7 +44,7 @@ int main()
   txBufStart[2] = 0xFFFFFFFF;
   txBufStart[3] = 0xFFFFFFFF;
   
-  CANInit(rxFifoStart, 0, txBufStart, extendedFilterStart, RX_FIFO_ELEMENT_COUNT, 0, TX_BUF_ELEMENT_COUNT, EXTENDED_FILTER_COUNT, rxBuf, processMsg);
+  CANInit(rxFifoStart, NULL, txBufStart, extendedFilterStart, RX_FIFO_ELEMENT_COUNT, 0, TX_BUF_ELEMENT_COUNT, EXTENDED_FILTER_COUNT, rxBuf, processMsg);
   
   heartInit();
 
