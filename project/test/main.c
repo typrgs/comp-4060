@@ -37,11 +37,10 @@ int main()
   CANInit(rxFifoStart, NULL, txBufStart, extendedFilterStart, RX_FIFO_ELEMENT_COUNT, 0, TX_BUF_ELEMENT_COUNT, EXTENDED_FILTER_COUNT, rxBuf, processMsg);
 
   // setup extended filter
-  extendedFilterStart[0] = 0b00100000000000000000000000000001; // store in FIFO 0 on match
-  extendedFilterStart[1] = 0b01000000000000000000000000000001; // dual filter (but using same ID)
+  CANUpdateFilter(0, 1, 1, STF0M, DUAL);
   
   // setup TX buffer element
-  CANUpdateTxBuf(0, 0b00000000000000000000000000001, 3, 0xFFFFFFFF, 0xFFFFFFFF);
+  CANUpdateTxBuf(0, 1, 3, 0xFFFFFFFF, 0xFFFFFFFF);
   
   heartInit();
 

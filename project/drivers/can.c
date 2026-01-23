@@ -5,6 +5,7 @@
 uint32_t *rxFifo0 = NULL;
 uint32_t *rxFifo1 = NULL;
 uint32_t *txBuf = NULL;
+uint32_t *filterList = NULL;
 uint8_t *rxBytes = NULL;
 CANCallback callback = NULL;
 
@@ -14,6 +15,7 @@ void CANInit(uint32_t *rxFifo0Start, uint32_t *rxFifo1Start, uint32_t *txBufStar
   rxFifo0 = rxFifo0Start;
   rxFifo1 = rxFifo1Start;
   txBuf = txBufStart;
+  filterList = extendedFilterListStart;
   rxBytes = buf;
   callback = rxCallback;
 
@@ -193,4 +195,12 @@ void CANUpdateTxBuf(uint8_t bufIndex, uint32_t id, uint8_t dataLength, uint32_t 
   // update data rows
   bufToUpdate[2] = firstData;
   bufToUpdate[3] = secondData;
+}
+
+void CANUpdateFilter(uint8_t filterIndex, uint32_t firstID, uint32_t secondID, FilterConfig config, FilterType type)
+{
+  uint32_t *filterToUpdate = &filterList[filterIndex];
+
+  filterToUpdate[0] = (((uint32_t)config) << 29 | firstID);
+  filterToUpdate[1] = (((uint32_t)type) << 30 | secondID);
 }
