@@ -29,7 +29,6 @@ typedef enum FILTER_TYPE
 
 typedef void (*CANCallback)(uint8_t);
 
-// need to define message RAM area first, including rx FIFO 0 area, tx Buffers area, and extended filters area
 void CANInit(uint32_t *rxFifo0Start, uint32_t *rxFifo1Start, uint32_t *txBufStart, uint32_t *extendedFilterListStart, uint32_t rxFifo0Count, uint32_t rxFifo1Count, uint32_t txBufCount, uint32_t extendedFilterListCount, uint8_t *buf, CANCallback rxCallback);
 void CANSend(uint32_t mask);
 void CANUpdateTxBuf(uint8_t bufIndex, uint32_t id, uint8_t dataLength, uint32_t firstData, uint32_t secondData);
