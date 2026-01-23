@@ -5,6 +5,8 @@
 // This unit requires the CAN trasceiver in either bus slot 2 or 3, with jumper cables from bus slot 1 TX and RX to the external UART TX and RX pads on the CAN trasceiver
 // This unit configures and uses generic clock 5
 
+#define CAN_WORD_SIZE 32 // bits
+
 #define EXTENDED_FILTER_WORDS 2 // 32-bit words
 #define RX_FIFO_ELEMENT_WORDS 4 // 32-bit words
 #define TX_BUF_ELEMENT_WORDS 4 // 32-bit words
