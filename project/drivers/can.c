@@ -4,6 +4,7 @@
 
 uint32_t *rxFifo0 = NULL;
 uint32_t *rxFifo1 = NULL;
+uint32_t *txBuf = NULL;
 uint8_t *rxBytes = NULL;
 CANCallback callback = NULL;
 
@@ -12,6 +13,7 @@ void CANInit(uint32_t *rxFifo0Start, uint32_t *rxFifo1Start, uint32_t *txBufStar
   // save necessary pointers 
   rxFifo0 = rxFifo0Start;
   rxFifo1 = rxFifo1Start;
+  txBuf = txBufStart;
   rxBytes = buf;
   callback = rxCallback;
 
@@ -150,7 +152,7 @@ void CAN1_Handler()
     }
 
     // mask out data length
-    uint8_t dlc = (uint8_t)((wordPointer[2] & 0xF0000) >> 0x10);
+    uint8_t dlc = (uint8_t)((wordPointer[1] & 0xF0000) >> 0x10);
 
     // get pointer to data section
     uint8_t *dataPointer = (uint8_t *)(&wordPointer[2]);
@@ -170,4 +172,25 @@ void CAN1_Handler()
     // invoke callback and pass data length
     callback(dlc);
   }
+}
+
+void CANUpdateTxBuf(uint8_t bufIndex, uint32_t id, uint8_t dataLength, uint32_t firstData, uint32_t secondData)
+{
+  uint32_t *bufToUpdate = (uint32_t *)(&txBuf[bufIndex]);
+
+  // clear out rows to be updated
+  for(int i=0; i<4; i++)
+  {
+    bufToUpdate[i] = 0;
+  }
+  
+  id &= 0x1FFFFFFF; // clear out top 3 bits of new ID just in case
+  bufToUpdate[0] = ((0b010 << 29) | id); // update first row
+
+  // update data length
+  bufToUpdate[1] = (((uint32_t)dataLength) << 0x10);
+
+  // update data rows
+  bufToUpdate[2] = firstData;
+  bufToUpdate[3] = secondData;
 }
