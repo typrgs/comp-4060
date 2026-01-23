@@ -4,9 +4,9 @@
 
 uint32_t *rxFifo = NULL;
 uint8_t *rxBytes = NULL;
-canCallback callback = NULL;
+CANCallback callback = NULL;
 
-void canInit(uint32_t *rxFifoStart, uint32_t *txBufStart, uint32_t *extendedFilterListStart, uint32_t rxFifoCount, uint32_t txBufCount, uint32_t extendedFilterListCount, uint8_t *buf, canCallback rxCallback)
+void CANInit(uint32_t *rxFifoStart, uint32_t *txBufStart, uint32_t *extendedFilterListStart, uint32_t rxFifoCount, uint32_t txBufCount, uint32_t extendedFilterListCount, uint8_t *buf, CANCallback rxCallback)
 {
   // save necessary pointers 
   rxFifo = rxFifoStart;
@@ -85,7 +85,7 @@ void canInit(uint32_t *rxFifoStart, uint32_t *txBufStart, uint32_t *extendedFilt
   while((CAN1_REGS->CAN_CCCR & CAN_CCCR_INIT_Msk) != 0);
 }
 
-void canSend(uint32_t mask)
+void CANSend(uint32_t mask)
 {
   // do a send of all transmit buffers defined in the passed mask
   CAN1_REGS->CAN_TXBAR = mask;

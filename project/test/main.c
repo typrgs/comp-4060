@@ -44,7 +44,7 @@ int main()
   txBufStart[2] = 0xFFFFFFFF;
   txBufStart[3] = 0xFFFFFFFF;
   
-  canInit(rxFifoStart, txBufStart, extendedFilterStart, RX_FIFO_ELEMENT_COUNT, TX_BUF_ELEMENT_COUNT, EXTENDED_FILTER_COUNT, rxBuf, processMsg);
+  CANInit(rxFifoStart, txBufStart, extendedFilterStart, RX_FIFO_ELEMENT_COUNT, TX_BUF_ELEMENT_COUNT, EXTENDED_FILTER_COUNT, rxBuf, processMsg);
   
   heartInit();
 
@@ -60,7 +60,7 @@ int main()
     
     if(msCount >= flashTimestamp)
     {
-      canSend(0xFFFFFFFF);
+      CANSend(0xFFFFFFFF);
       PORT_REGS->GROUP[0].PORT_OUTTGL = PORT_PA14;
       flashTimestamp = msCount + 500;
     }
