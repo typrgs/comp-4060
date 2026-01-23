@@ -2,14 +2,16 @@
 
 #define CS_PIN PORT_PB05;
 
-uint32_t *rxFifo = NULL;
+uint32_t *rxFifo0 = NULL;
+uint32_t *rxFifo1 = NULL;
 uint8_t *rxBytes = NULL;
 CANCallback callback = NULL;
 
-void CANInit(uint32_t *rxFifoStart, uint32_t *txBufStart, uint32_t *extendedFilterListStart, uint32_t rxFifoCount, uint32_t txBufCount, uint32_t extendedFilterListCount, uint8_t *buf, CANCallback rxCallback)
+void CANInit(uint32_t *rxFifo0Start, uint32_t *rxFifo1Start, uint32_t *txBufStart, uint32_t *extendedFilterListStart, uint32_t rxFifo0Count, uint32_t rxFifo1Count, uint32_t txBufCount, uint32_t extendedFilterListCount, uint8_t *buf, CANCallback rxCallback)
 {
   // save necessary pointers 
-  rxFifo = rxFifoStart;
+  rxFifo0 = rxFifo0Start;
+  rxFifo1 = rxFifo1Start;
   rxBytes = buf;
   callback = rxCallback;
 
@@ -53,16 +55,34 @@ void CANInit(uint32_t *rxFifoStart, uint32_t *txBufStart, uint32_t *extendedFilt
   CAN1_REGS->CAN_XIDAM = CAN_XIDAM_RESETVALUE; // mask is not active when set to reset value
 
   // configure Rx FIFO 0
-  CAN1_REGS->CAN_RXF0C = CAN_RXF0C_F0S(rxFifoCount) | CAN_RXF0C_F0SA(rxFifoStart);
-
-  // configure Rx FIFO element size
-  CAN1_REGS->CAN_RXESC = CAN_RXESC_F0DS_DATA8;
-
-  // enable Rx FIFO new message interrupt
-  CAN1_REGS->CAN_IE = CAN_IE_RF0NE_Msk;
+  if(rxFifo0Count > 0)
+  {
+    CAN1_REGS->CAN_RXF0C = CAN_RXF0C_F0S(rxFifo0Count) | CAN_RXF0C_F0SA(rxFifo0Start);
   
-  // enable FIFO interrupt line 0
-  CAN1_REGS->CAN_ILE = CAN_ILE_EINT0_Msk;
+    // configure Rx FIFO 0 element size
+    CAN1_REGS->CAN_RXESC |= CAN_RXESC_F0DS_DATA8;
+  
+    // enable Rx FIFO 0 new message interrupt
+    CAN1_REGS->CAN_IE |= CAN_IE_RF0NE_Msk;
+    
+    // enable Rx FIFO 0 interrupt line 0
+    CAN1_REGS->CAN_ILE |= CAN_ILE_EINT0_Msk;
+  }
+
+  // configure Rx FIFO 1
+  if(rxFifo1Count > 0)
+  {
+    CAN1_REGS->CAN_RXF1C = CAN_RXF1C_F1S(rxFifo1Count) | CAN_RXF1C_F1SA(rxFifo1Start);
+  
+    // configure Rx FIFO 1 element size
+    CAN1_REGS->CAN_RXESC |= CAN_RXESC_F1DS_DATA8;
+  
+    // enable Rx FIFO 1 new message interrupt
+    CAN1_REGS->CAN_IE |= CAN_IE_RF1NE_Msk;
+    
+    // enable Rx FIFO 1 interrupt line 0
+    CAN1_REGS->CAN_ILE |= CAN_ILE_EINT0_Msk;
+  }
 
   // enable interrupts for CAN1
   NVIC_EnableIRQ(CAN1_IRQn);
@@ -96,38 +116,57 @@ void CANSend(uint32_t mask)
 
 void CAN1_Handler()
 {
-  if((CAN1_REGS->CAN_IR & CAN_IR_RF0N_Msk) != 0)
+  if((CAN1_REGS->CAN_IR & CAN_IR_RF0N_Msk) != 0 || (CAN1_REGS->CAN_IR & CAN_IR_RF1N_Msk) != 0)
   {
-    // clear interrupt
-    CAN1_REGS->CAN_IR = CAN_IR_RF0N_Msk;
+    uint32_t *wordPointer = NULL;
 
-    // get the index of the next element to receive
-    uint32_t getIndex = (CAN1_REGS->CAN_RXF0S & CAN_RXF0S_F0GI_Msk);
-    
-    // set acknowledge of receive
-    CAN1_REGS->CAN_RXF0A = getIndex;
+    if((CAN1_REGS->CAN_IR & CAN_IR_RF0N_Msk) != 0)
+    {
+      // clear interrupt
+      CAN1_REGS->CAN_IR = CAN_IR_RF0N_Msk;
   
-    // get pointer to FIFO element 
-    uint32_t *wordPointer = &rxFifo[getIndex * RX_FIFO_ELEMENT_WORDS];
+      // get the index of the next element to receive
+      uint32_t getIndex = (CAN1_REGS->CAN_RXF0S & CAN_RXF0S_F0GI_Msk);
+      
+      // set acknowledge of receive
+      CAN1_REGS->CAN_RXF0A = getIndex;
+    
+      // get pointer to FIFO element 
+      wordPointer = &rxFifo0[getIndex * RX_FIFO_ELEMENT_WORDS];
+    }
+    else if((CAN1_REGS->CAN_IR & CAN_IR_RF1N_Msk) != 0)
+    {
+      // clear interrupt
+      CAN1_REGS->CAN_IR = CAN_IR_RF1N_Msk;
+  
+      // get the index of the next element to receive
+      uint32_t getIndex = (CAN1_REGS->CAN_RXF1S & CAN_RXF1S_F1GI_Msk);
+      
+      // set acknowledge of receive
+      CAN1_REGS->CAN_RXF1A = getIndex;
+    
+      // get pointer to FIFO element 
+      wordPointer = &rxFifo1[getIndex * RX_FIFO_ELEMENT_WORDS];
+    }
 
     // mask out data length
     uint8_t dlc = (uint8_t)((wordPointer[2] & 0xF0000) >> 0x10);
 
     // get pointer to data section
     uint8_t *dataPointer = (uint8_t *)(&wordPointer[2]);
-
+    
     // wipe data from last receive to avoid data leakage
     for(int i=0; i<RX_FIFO_ELEMENT_DATA_BYTES; i++)
     {
       rxBytes[i] = 0;
     }
-
+    
     // copy data section to receive buffer
     for(int i=0; i<dlc; i++)
     {
       rxBytes[i] = dataPointer[i];
     }
-
+    
     // invoke callback and pass data length
     callback(dlc);
   }
