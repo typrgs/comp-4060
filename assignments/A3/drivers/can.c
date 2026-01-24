@@ -284,17 +284,20 @@ bool CANSendBytes(uint8_t const * const bytes, uint16_t size)
     // wait for a byte to come in or reach timeout
     while(!receivedWhileSensing && tcOvfCount < TX_POLL_TIMEOUT);
 
-    // reset flag and ovf count if a byte is received before reaching timeout
-    if(receivedWhileSensing)
+    // stop timer when we exit the above loop to check the ovf value without it potentially changing
+    tc0Disable();
+
+    // reset flag and ovf count if a byte is received before reaching timeout, start timer again
+    if(tcOvfCount < TX_POLL_TIMEOUT)
     {
       tcOvfCount = 0;
+      tc0Enable();
     }
   }
   
   // update flags in this order to prevent RX interrupt from processing any stray byte, causing the state machine to transition
   transmitting = true;
   sensing = false;
-  tc0Disable();
 
   // begin transmitting bytes
   crcInit();
