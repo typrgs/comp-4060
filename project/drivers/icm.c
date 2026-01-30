@@ -10,12 +10,6 @@ void icmInit()
   MCLK_REGS->MCLK_AHBMASK |= MCLK_AHBMASK_ICM_Msk;
   MCLK_REGS->MCLK_APBCMASK |= MCLK_APBCMASK_ICM_Msk;
 
-  // software reset ICM
-  ICM_REGS->ICM_CTRL = ICM_CTRL_SWRST_Msk;
-
-  // disable region monitoring
-  ICM_REGS->ICM_CTRL = ICM_CTRL_RMDIS(0xF);
-
   // set algorithm to SHA256
   ICM_REGS->ICM_CFG = ICM_CFG_UALGO_SHA256;
 
@@ -41,18 +35,19 @@ static void padMsg(uint64_t msg)
   {
     hashData[hashDataPos] = 0;
   }
+
   // put the message into the hash data region
-  for(hashDataPos=0; hashDataPos<4; hashDataPos++)
+  for(hashDataPos=0; hashDataPos<8; hashDataPos++)
   {
-    hashData[hashDataPos] = ((msg >> (64 - ((hashDataPos+1) * 16))) & 0xFF);
+    hashData[hashDataPos] = ((msg >> ((hashDataPos) * 8)) & 0xFF);
   }
 
   // append 1
   hashData[hashDataPos++] = 0x80;
 
-  // use last 64 bits (8 bytes) to store the message length
+  // use last 64 bits (8 bytes) to store the message length, big endian
   // (always set to 16, as a 64-bit integer can be represented as a hex string of length 16)
-  hashData[59] = 0x01;
+  hashData[56] = 0x08;
 }
 
 void icmSHA256(uint64_t msg, uint8_t *result)
@@ -64,9 +59,8 @@ void icmSHA256(uint64_t msg, uint8_t *result)
   ICM_REGS->ICM_CTRL = ICM_CTRL_ENABLE_Msk;
   while((ICM_REGS->ICM_SR & ICM_SR_ENABLE_Msk) == 0);
 
+  // wait for hash to finish
   while((ICM_REGS->ICM_ISR & ICM_ISR_RHC_Msk) == 0);
-  
-  dbg_write_u8(digest, 32);
   
   // copy digest to result buffer
   for(int i=0; i<32; i++)

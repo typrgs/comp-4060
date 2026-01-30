@@ -11,7 +11,7 @@ int main()
   icmInit();
   heartInit();
 
-  uint64_t msg = 1305976;
+  uint64_t msg = 0;
   uint8_t digest[32];
 
   // LED output
@@ -27,7 +27,9 @@ int main()
     if(msCount >= flashTimestamp)
     {
       icmSHA256(msg, digest);
-      // dbg_write_u8(digest, 32);
+      dbg_write_u8(digest, 32);
+      dbg_write_char('\n');
+      msg++;
       PORT_REGS->GROUP[0].PORT_OUTTGL = PORT_PA14;
       flashTimestamp = msCount + 500;
     }
