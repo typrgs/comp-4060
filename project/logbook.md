@@ -23,3 +23,11 @@ Jan 22:
 Jan 23:
   - Added code to implement use of RX FIFO 1
   - Added functions for updating filters and tx buffer contents, added enums for filter configs and types
+
+Jan 29:
+  - Decided on a project to do: a PoW blockchain
+  - Started implementing SHA256 by looking at wikipedia pseudocode, realized the mcu can do SHA256
+  - Started implemented ICM driver for SHA256 computation, not currently working
+
+Jan 30:
+  - Got ICM driver working and hashing bytes
