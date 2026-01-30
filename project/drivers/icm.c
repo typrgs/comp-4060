@@ -10,6 +10,9 @@ void icmInit()
   MCLK_REGS->MCLK_AHBMASK |= MCLK_AHBMASK_ICM_Msk;
   MCLK_REGS->MCLK_APBCMASK |= MCLK_APBCMASK_ICM_Msk;
 
+  // software reset ICM
+  ICM_REGS->ICM_CTRL = ICM_CTRL_SWRST_Msk;
+
   // set algorithm to SHA256
   ICM_REGS->ICM_CFG = ICM_CFG_UALGO_SHA256;
 
@@ -19,11 +22,11 @@ void icmInit()
   // set start address of hash area
   ICM_REGS->ICM_HASH = (uint32_t)digest;
 
-  // set algorithm and EOM bit in transfer descriptor region
-  transferDesc.ICM_RCFG = ICM_RCFG_ALGO_Msk | ICM_RCFG_PROCDLY_SHORT | ICM_RCFG_EOM_Msk;
+  // set SHA256 algorithm, shortest processing delay, enable region hash complete interrupt, and set end of monitoring bit
+  transferDesc.ICM_RCFG = ICM_RCFG_ALGO_Msk | ICM_RCFG_PROCDLY_SHORT | ICM_RCFG_RHIEN_Msk | ICM_RCFG_EOM_Msk;
 
-  // disable region monitoring for all regions and enable ICM
-  ICM_REGS->ICM_CTRL = ICM_CTRL_RMDIS(0) | ICM_CTRL_ENABLE_Msk;
+  // enable ICM
+  ICM_REGS->ICM_CTRL = ICM_CTRL_ENABLE_Msk;
 }
 
 static void padMsg(uint64_t msg)
@@ -50,7 +53,7 @@ static void padMsg(uint64_t msg)
   hashData[59] = 0x01;
 }
 
-void SHA256(uint64_t msg, uint8_t *digest)
+void SHA256(uint64_t msg, uint8_t *result)
 {
   // pad message and place in hash data area
   padMsg(msg);
@@ -58,4 +61,10 @@ void SHA256(uint64_t msg, uint8_t *digest)
   // compute new hash for given message
   ICM_REGS->ICM_CTRL = ICM_CTRL_REHASH(1);
   while((ICM_REGS->ICM_SR & ICM_ISR_RHC_Msk) == 0);
+
+  // copy digest to result buffer
+  for(int i=0; i<64; i++)
+  {
+    result[i] = digest[i];
+  }
 }
