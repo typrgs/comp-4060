@@ -31,3 +31,4 @@ Jan 29:
 
 Jan 30:
   - Got ICM driver working and hashing bytes
+  - Create structs for tx buf and filter for easier updating
