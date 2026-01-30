@@ -1,4 +1,4 @@
-TARGETS = drivers test
+TARGETS = drivers test app
 TYPE = debug
 
 .PHONY: targets $(TARGETS)

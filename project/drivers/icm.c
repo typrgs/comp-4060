@@ -1,6 +1,6 @@
 #include "icm.h"
 
-static icm_descriptor_registers_t transferDesc __ALIGNED(64);
+static icm_descriptor_registers_t transferDesc __ALIGNED(64) = {0};
 static uint8_t digest[32] __ALIGNED(128); // hash area is 32 bytes to hold a SHA256 digest
 static uint8_t hashData[64]; // data to hash needs to be padded so it is 512 bits long
 
@@ -13,6 +13,9 @@ void icmInit()
   // software reset ICM
   ICM_REGS->ICM_CTRL = ICM_CTRL_SWRST_Msk;
 
+  // disable region monitoring
+  ICM_REGS->ICM_CTRL = ICM_CTRL_RMDIS(0xF);
+
   // set algorithm to SHA256
   ICM_REGS->ICM_CFG = ICM_CFG_UALGO_SHA256;
 
@@ -20,25 +23,24 @@ void icmInit()
   ICM_REGS->ICM_DSCR = (uint32_t)&transferDesc;
 
   // set start address of hash area
-  ICM_REGS->ICM_HASH = (uint32_t)digest;
+  ICM_REGS->ICM_HASH = (uint32_t)(&digest[0]);
 
-  // set SHA256 algorithm, shortest processing delay, enable region hash complete interrupt, and set end of monitoring bit
-  transferDesc.ICM_RCFG = ICM_RCFG_ALGO_Msk | ICM_RCFG_PROCDLY_SHORT | ICM_RCFG_RHIEN_Msk | ICM_RCFG_EOM_Msk;
+  // set start address of data region
+  transferDesc.ICM_RADDR = (uint32_t)(&hashData[0]);
 
-  // enable ICM
-  ICM_REGS->ICM_CTRL = ICM_CTRL_ENABLE_Msk;
+  // set SHA256 algorithm, shortest processing delay, and set end of monitoring bit
+  transferDesc.ICM_RCFG = ICM_RCFG_ALGO(1) | ICM_RCFG_PROCDLY_SHORT | ICM_RCFG_EOM_Msk;
 }
 
 static void padMsg(uint64_t msg)
 {
-  int hashDataPos = 0;
+  uint8_t hashDataPos = 0;
 
   // reset hash data region
   for(hashDataPos=0; hashDataPos<64; hashDataPos++)
   {
     hashData[hashDataPos] = 0;
   }
-
   // put the message into the hash data region
   for(hashDataPos=0; hashDataPos<4; hashDataPos++)
   {
@@ -53,18 +55,26 @@ static void padMsg(uint64_t msg)
   hashData[59] = 0x01;
 }
 
-void SHA256(uint64_t msg, uint8_t *result)
+void icmSHA256(uint64_t msg, uint8_t *result)
 {
   // pad message and place in hash data area
   padMsg(msg);
+  
+  // enable ICM
+  ICM_REGS->ICM_CTRL = ICM_CTRL_ENABLE_Msk;
+  while((ICM_REGS->ICM_SR & ICM_SR_ENABLE_Msk) == 0);
 
-  // compute new hash for given message
-  ICM_REGS->ICM_CTRL = ICM_CTRL_REHASH(1);
-  while((ICM_REGS->ICM_SR & ICM_ISR_RHC_Msk) == 0);
-
+  while((ICM_REGS->ICM_ISR & ICM_ISR_RHC_Msk) == 0);
+  
+  dbg_write_u8(digest, 32);
+  
   // copy digest to result buffer
-  for(int i=0; i<64; i++)
+  for(int i=0; i<32; i++)
   {
     result[i] = digest[i];
   }
+
+  // disable ICM
+  ICM_REGS->ICM_CTRL = ICM_CTRL_DISABLE_Msk;
+  while((ICM_REGS->ICM_SR & ICM_SR_ENABLE_Msk) != 0);
 }
