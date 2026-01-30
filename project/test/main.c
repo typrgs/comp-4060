@@ -32,7 +32,7 @@ int main()
   // enable interrupts
   __enable_irq();
 
-  CANInit(rxFifoStart, NULL, txBufStart, extendedFilterStart, rxBuf, processMsg);
+  CANInit(rxFifoStart, NULL, txBufStart, extendedFilterStart, RX_FIFO_ELEMENT_COUNT, 0, TX_BUF_ELEMENT_COUNT, EXTENDED_FILTER_COUNT, rxBuf, processMsg);
 
   // setup extended filter
   CANUpdateFilter(0, 1, 1, STF0M, DUAL);

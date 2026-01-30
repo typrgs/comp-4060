@@ -9,7 +9,7 @@ uint32_t *filterList = NULL;
 uint8_t *rxBytes = NULL;
 CANCallback callback = NULL;
 
-void CANInit(uint32_t *rxFifo0Start, uint32_t *rxFifo1Start, uint32_t *txBufStart, uint32_t *extendedFilterListStart, uint8_t *buf, CANCallback rxCallback)
+void CANInit(uint32_t *rxFifo0Start, uint32_t *rxFifo1Start, uint32_t *txBufStart, uint32_t *extendedFilterListStart, uint32_t rxFifo0Count, uint32_t rxFifo1Count, uint32_t txBufCount, uint32_t extendedFilterListCount, uint8_t *buf, CANCallback rxCallback)
 {
   // save necessary pointers 
   rxFifo0 = rxFifo0Start;
@@ -53,40 +53,46 @@ void CANInit(uint32_t *rxFifo0Start, uint32_t *rxFifo1Start, uint32_t *txBufStar
   CAN1_REGS->CAN_GFC = CAN_GFC_ANFE_REJECT; // reject any non-matching frames
 
   // set extended ID filter configuration
-  CAN1_REGS->CAN_XIDFC = CAN_XIDFC_LSE(0) | CAN_XIDFC_FLESA(extendedFilterListStart);
+  CAN1_REGS->CAN_XIDFC = CAN_XIDFC_LSE(extendedFilterListCount) | CAN_XIDFC_FLESA(extendedFilterListStart);
 
   // configure extended ID AND mask
   CAN1_REGS->CAN_XIDAM = CAN_XIDAM_RESETVALUE; // mask is not active when set to reset value
 
   // configure Rx FIFO 0
-  CAN1_REGS->CAN_RXF0C = CAN_RXF0C_F0S(0) | CAN_RXF0C_F0SA(rxFifo0Start);
-
-  // configure Rx FIFO 0 element size
-  CAN1_REGS->CAN_RXESC |= CAN_RXESC_F0DS_DATA8;
-
-  // enable Rx FIFO 0 new message interrupt
-  CAN1_REGS->CAN_IE |= CAN_IE_RF0NE_Msk;
+  if(rxFifo0Count > 0)
+  {
+    CAN1_REGS->CAN_RXF0C = CAN_RXF0C_F0S(rxFifo0Count) | CAN_RXF0C_F0SA(rxFifo0Start);
   
-  // enable Rx FIFO 0 interrupt line 0
-  CAN1_REGS->CAN_ILE |= CAN_ILE_EINT0_Msk;
-
-// configure Rx FIFO 1
-  CAN1_REGS->CAN_RXF1C = CAN_RXF1C_F1S(0) | CAN_RXF1C_F1SA(rxFifo1Start);
-
-  // configure Rx FIFO 1 element size
-  CAN1_REGS->CAN_RXESC |= CAN_RXESC_F1DS_DATA8;
-
-  // enable Rx FIFO 1 new message interrupt
-  CAN1_REGS->CAN_IE |= CAN_IE_RF1NE_Msk;
+    // configure Rx FIFO 0 element size
+    CAN1_REGS->CAN_RXESC |= CAN_RXESC_F0DS_DATA8;
   
-  // enable Rx FIFO 1 interrupt line 0
-  CAN1_REGS->CAN_ILE |= CAN_ILE_EINT0_Msk;
+    // enable Rx FIFO 0 new message interrupt
+    CAN1_REGS->CAN_IE |= CAN_IE_RF0NE_Msk;
+    
+    // enable Rx FIFO 0 interrupt line 0
+    CAN1_REGS->CAN_ILE |= CAN_ILE_EINT0_Msk;
+  }
+
+  // configure Rx FIFO 1
+  if(rxFifo1Count > 0)
+  {
+    CAN1_REGS->CAN_RXF1C = CAN_RXF1C_F1S(rxFifo1Count) | CAN_RXF1C_F1SA(rxFifo1Start);
+  
+    // configure Rx FIFO 1 element size
+    CAN1_REGS->CAN_RXESC |= CAN_RXESC_F1DS_DATA8;
+  
+    // enable Rx FIFO 1 new message interrupt
+    CAN1_REGS->CAN_IE |= CAN_IE_RF1NE_Msk;
+    
+    // enable Rx FIFO 1 interrupt line 0
+    CAN1_REGS->CAN_ILE |= CAN_ILE_EINT0_Msk;
+  }
 
   // enable interrupts for CAN1
   NVIC_EnableIRQ(CAN1_IRQn);
 
   // configure Tx Buffer
-  CAN1_REGS->CAN_TXBC = CAN_TXBC_NDTB(0) | CAN_TXBC_TBSA(txBufStart);
+  CAN1_REGS->CAN_TXBC = CAN_TXBC_NDTB(txBufCount) | CAN_TXBC_TBSA(txBufStart);
 
   // configure Tx Buffer element size
   CAN1_REGS->CAN_TXESC = CAN_TXESC_TBDS_DATA8;
@@ -168,26 +174,6 @@ void CAN1_Handler()
     // invoke callback and pass data length
     callback(dlc);
   }
-}
-
-void CANSetFifo0Size(uint8_t size)
-{
-  CAN1_REGS->CAN_RXF0C |= CAN_RXF0C_F0S(size);
-}
-
-void CANSetFifo1Size(uint8_t size)
-{
-  CAN1_REGS->CAN_RXF1C |= CAN_RXF0C_F1S(size);
-}
-
-void CANSetTxBufSize(uint8_t size)
-{
-  CAN1_REGS->CAN_TXBC |= CAN_TXBC_NDTB(size);
-}
-
-void CANSetFilterListSize(uint8_t size)
-{
-  CAN1_REGS->CAN_XIDFC |= CAN_XIDFC_LSE(size);
 }
 
 void CANUpdateTxBuf(uint8_t bufIndex, uint32_t id, uint8_t dataLength, uint32_t firstData, uint32_t secondData)
