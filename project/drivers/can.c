@@ -176,9 +176,9 @@ void CAN1_Handler()
   }
 }
 
-void CANUpdateTxBuf(uint8_t bufIndex, uint32_t id, uint8_t dataLength, uint32_t firstData, uint32_t secondData)
+void CANUpdateTxBuf(CANTxBuf buf)
 {
-  uint32_t *bufToUpdate = (uint32_t *)(&txBuf[bufIndex]);
+  uint32_t *bufToUpdate = (uint32_t *)(&txBuf[buf.bufIndex]);
 
   // clear out rows to be updated
   for(int i=0; i<4; i++)
@@ -186,21 +186,21 @@ void CANUpdateTxBuf(uint8_t bufIndex, uint32_t id, uint8_t dataLength, uint32_t 
     bufToUpdate[i] = 0;
   }
   
-  id &= 0x1FFFFFFF; // clear out top 3 bits of new ID just in case
-  bufToUpdate[0] = ((0b010 << 29) | id); // update first row
+  buf.id &= 0x1FFFFFFF; // clear out top 3 bits of new ID just in case
+  bufToUpdate[0] = ((0b010 << 29) | buf.id); // update first row
 
   // update data length
-  bufToUpdate[1] = (((uint32_t)dataLength) << 0x10);
+  bufToUpdate[1] = (((uint32_t)buf.dataLength) << 0x10);
 
   // update data rows
-  bufToUpdate[2] = firstData;
-  bufToUpdate[3] = secondData;
+  bufToUpdate[2] = buf.firstData;
+  bufToUpdate[3] = buf.secondData;
 }
 
-void CANUpdateFilter(uint8_t filterIndex, uint32_t firstID, uint32_t secondID, FilterConfig config, FilterType type)
+void CANUpdateFilter(CANExtFilter filter)
 {
-  uint32_t *filterToUpdate = &filterList[filterIndex];
+  uint32_t *filterToUpdate = &filterList[filter.filterIndex];
 
-  filterToUpdate[0] = (((uint32_t)config) << 29 | firstID);
-  filterToUpdate[1] = (((uint32_t)type) << 30 | secondID);
+  filterToUpdate[0] = (((uint32_t)filter.config) << 29 | filter.firstID);
+  filterToUpdate[1] = (((uint32_t)filter.type) << 30 | filter.secondID);
 }

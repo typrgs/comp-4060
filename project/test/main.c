@@ -35,10 +35,25 @@ int main()
   CANInit(rxFifoStart, NULL, txBufStart, extendedFilterStart, RX_FIFO_ELEMENT_COUNT, 0, TX_BUF_ELEMENT_COUNT, EXTENDED_FILTER_COUNT, rxBuf, processMsg);
 
   // setup extended filter
-  CANUpdateFilter(0, 1, 1, STF0M, DUAL);
+  CANExtFilter filter = {
+    0,
+    1,
+    1,
+    STF0M,
+    DUAL
+  };
+  CANUpdateFilter(filter);
+
   
   // setup TX buffer element
-  CANUpdateTxBuf(0, 1, 3, 0xFFFFFFFF, 0xFFFFFFFF);
+  CANTxBuf buf = {
+    0,
+    1,
+    3,
+    0,
+    0
+  };
+  CANUpdateTxBuf(buf);
   
   heartInit();
 
@@ -54,7 +69,9 @@ int main()
     
     if(msCount >= flashTimestamp)
     {
-      CANSend(0xFFFFFFFF);
+      CANSend(1);
+      buf.firstData++;
+      CANUpdateTxBuf(buf);
       PORT_REGS->GROUP[0].PORT_OUTTGL = PORT_PA14;
       flashTimestamp = msCount + 500;
     }
