@@ -59,7 +59,7 @@ void CANInit(uint32_t *rxFifo0Start, uint32_t *rxFifo1Start, uint32_t *txBufStar
   CAN1_REGS->CAN_XIDAM = CAN_XIDAM_RESETVALUE; // mask is not active when set to reset value
 
   // configure Rx FIFO 0
-  if(rxFifo0Count > 0)
+  if(rxFifo0Count > 0 && rxFifo0Start != NULL)
   {
     CAN1_REGS->CAN_RXF0C = CAN_RXF0C_F0S(rxFifo0Count) | CAN_RXF0C_F0SA(rxFifo0Start);
   
@@ -74,7 +74,7 @@ void CANInit(uint32_t *rxFifo0Start, uint32_t *rxFifo1Start, uint32_t *txBufStar
   }
 
   // configure Rx FIFO 1
-  if(rxFifo1Count > 0)
+  if(rxFifo1Count > 0 && rxFifo1Start != NULL)
   {
     CAN1_REGS->CAN_RXF1C = CAN_RXF1C_F1S(rxFifo1Count) | CAN_RXF1C_F1SA(rxFifo1Start);
   
