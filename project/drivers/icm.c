@@ -26,7 +26,7 @@ void icmInit()
   transferDesc.ICM_RCFG = ICM_RCFG_ALGO(1) | ICM_RCFG_PROCDLY_SHORT | ICM_RCFG_EOM_Msk;
 }
 
-static void padMsg(uint64_t msg)
+static void padMsg(uint8_t *msg, uint64_t msgLen)
 {
   uint8_t hashDataPos = 0;
 
@@ -37,23 +37,29 @@ static void padMsg(uint64_t msg)
   }
 
   // put the message into the hash data region
-  for(hashDataPos=0; hashDataPos<8; hashDataPos++)
+  for(hashDataPos=0; hashDataPos<msgLen; hashDataPos++)
   {
-    hashData[hashDataPos] = ((msg >> ((hashDataPos) * 8)) & 0xFF);
+    hashData[hashDataPos] = msg[hashDataPos];
   }
 
   // append 1
   hashData[hashDataPos++] = 0x80;
 
   // use last 64 bits (8 bytes) to store the message length, big endian
-  // (always set to 16, as a 64-bit integer can be represented as a hex string of length 16)
-  hashData[56] = 0x08;
+  // address the length variable in bytes
+  uint8_t *lenPtr = &msgLen;
+
+  // place msgLen bytes in big endian order
+  for(int i=7; i>=0; i--)
+  {
+    hashData[63-i] = lenPtr[i];
+  }
 }
 
-void icmSHA256(uint64_t msg, uint8_t *result)
+void icmSHA256(uint8_t *msg, uint64_t msgLen, uint8_t *result)
 {
   // pad message and place in hash data area
-  padMsg(msg);
+  padMsg(msg, msgLen);
   
   // enable ICM
   ICM_REGS->ICM_CTRL = ICM_CTRL_ENABLE_Msk;

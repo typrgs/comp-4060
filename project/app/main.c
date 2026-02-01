@@ -37,9 +37,6 @@ int main()
   CANInit(rxFifoStart, NULL, txBufStart, extendedFilterStart, RX_FIFO_ELEMENT_COUNT, 0, TX_BUF_ELEMENT_COUNT, EXTENDED_FILTER_COUNT, rxBuf, rxCallback);
   heartInit();
 
-  uint64_t msg = 0;
-  uint8_t digest[32];
-
   // LED output
   PORT_REGS->GROUP[0].PORT_DIRSET = PORT_PA14;
   PORT_REGS->GROUP[0].PORT_OUTSET = PORT_PA14;
@@ -52,10 +49,6 @@ int main()
     
     if(msCount >= flashTimestamp)
     {
-      icmSHA256(msg, digest);
-      dbg_write_u8(digest, 32);
-      dbg_write_char('\n');
-      msg++;
       PORT_REGS->GROUP[0].PORT_OUTTGL = PORT_PA14;
       flashTimestamp = msCount + 500;
     }
