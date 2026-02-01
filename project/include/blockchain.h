@@ -2,6 +2,8 @@
 
 #include "common.h"
 
+#define BLOCK_HASH_SIZE 32 // bytes
+
 typedef struct TRANSACTION
 {
   uint8_t srcID;
@@ -13,7 +15,7 @@ typedef struct BLOCK
 {
   uint8_t minerID;
   Transaction transaction;
-  uint8_t hash[64];
+  uint8_t hash[32];
   uint8_t height;
   uint32_t nonce;
 } Block;
