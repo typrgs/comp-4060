@@ -196,8 +196,8 @@ void CANUpdateTxBuf(CANTxBuf buf)
   bufToUpdate[1] = (((uint32_t)buf.dataLength) << 0x10);
 
   // update data rows
-  bufToUpdate[2] = *((uint32_t *)buf.firstData);
-  bufToUpdate[3] = *((uint32_t *)buf.secondData);
+  bufToUpdate[2] = *((uint32_t *)buf.data);
+  bufToUpdate[3] = *((uint32_t *)&buf.data[4]);
 }
 
 void CANUpdateFilter(CANExtFilter filter)

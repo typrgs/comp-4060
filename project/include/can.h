@@ -33,8 +33,7 @@ typedef struct CAN_TX_BUF
   uint8_t bufIndex;
   uint32_t id;
   uint8_t dataLength;
-  uint8_t firstData[4];
-  uint8_t secondData[4];
+  uint8_t data[8];
 } CANTxBuf;
 
 typedef struct CAN_EXT_FILTER
