@@ -47,7 +47,7 @@ static void padMsg(uint8_t *msg, uint64_t msgLen)
 
   // use last 64 bits (8 bytes) to store the message length, big endian
   // address the length variable in bytes
-  uint8_t *lenPtr = &msgLen;
+  uint8_t *lenPtr = (uint8_t *)&msgLen;
 
   // place msgLen bytes in big endian order
   for(int i=7; i>=0; i--)
