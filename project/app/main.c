@@ -28,6 +28,8 @@ static CANExtFilter filters[NUM_MSG_TYPES] = {0};
 
 static uint8_t deviceID;
 
+static Block blockchain[512] = {0};
+
 
 static void rxCallback(uint8_t len, uint32_t id)
 {
@@ -50,6 +52,15 @@ static void readParams()
   // save device ID given in flash parameters
   uint8_t *params = (uint8_t *)0x000fe000;
   deviceID = params[0];
+
+  // this parameter indicates whether this node should define the genesis block on startup
+  if(params[1])
+  {
+    blockchain[0].nonce = UINT32_MAX;
+    blockchain[0].transaction.amt = 0;
+    blockchain[0].transaction.srcID = 0;
+    blockchain[0].transaction.destID = 0;
+  }
 }
 
 static void setupFilters()
@@ -86,7 +97,7 @@ static void setupTxBufs()
     txBufs[i].bufIndex = i;
     txBufs[i].id = i;
     txBufs[i].dataLength = 1;
-    txBufs[i].firstData[0] = deviceID;
+    txBufs[i].data[0] = deviceID;
     
     if(i == BLOCK || i == NEW_BLOCK)
     {
