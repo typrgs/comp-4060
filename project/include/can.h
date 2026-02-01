@@ -2,7 +2,7 @@
 
 #include "common.h"
 
-// This unit requires the CAN transceiver in either bus slot 2, with jumper cables from bus slot 1 TX and RX to the external UART TX and RX pads on the CAN transceiver
+// This unit requires the CAN transceiver in bus slot 2, with jumper cables from bus slot 1 TX and RX to the external UART TX and RX pads on the CAN transceiver
 // This unit configures and uses generic clock 5
 
 #define EXTENDED_FILTER_WORDS 2 // 32-bit words

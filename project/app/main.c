@@ -5,7 +5,7 @@
 #include "blockchain.h"
 
 #define EXTENDED_FILTER_COUNT 1
-#define RX_FIFO_ELEMENT_COUNT 1
+#define RX_FIFO_ELEMENT_COUNT 3
 #define TX_BUF_ELEMENT_COUNT 1
 
 // setup message RAM for CAN

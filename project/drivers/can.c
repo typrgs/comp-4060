@@ -130,7 +130,7 @@ void CAN1_Handler()
       CAN1_REGS->CAN_IR = CAN_IR_RF0N_Msk;
   
       // get the index of the next element to receive
-      uint32_t getIndex = (CAN1_REGS->CAN_RXF0S & CAN_RXF0S_F0GI_Msk);
+      uint32_t getIndex = (CAN1_REGS->CAN_RXF0S & CAN_RXF0S_F0GI_Msk) >> 8;
       
       // set acknowledge of receive
       CAN1_REGS->CAN_RXF0A = getIndex;
@@ -144,7 +144,7 @@ void CAN1_Handler()
       CAN1_REGS->CAN_IR = CAN_IR_RF1N_Msk;
   
       // get the index of the next element to receive
-      uint32_t getIndex = (CAN1_REGS->CAN_RXF1S & CAN_RXF1S_F1GI_Msk);
+      uint32_t getIndex = (CAN1_REGS->CAN_RXF1S & CAN_RXF1S_F1GI_Msk) >> 8;
       
       // set acknowledge of receive
       CAN1_REGS->CAN_RXF1A = getIndex;
