@@ -15,7 +15,7 @@ typedef struct BLOCK
 {
   uint8_t minerID;
   Transaction transaction;
-  uint8_t hash[32];
+  uint8_t prevHash[32];
   uint8_t height;
   uint32_t nonce;
 } Block;
