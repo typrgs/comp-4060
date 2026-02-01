@@ -24,6 +24,7 @@ typedef enum FILTER_TYPE
 {
   RANGE,
   DUAL,
+  CLASSIC,
   NUM_TYPES
 } FilterType;
 
@@ -32,8 +33,8 @@ typedef struct CAN_TX_BUF
   uint8_t bufIndex;
   uint32_t id;
   uint8_t dataLength;
-  uint32_t firstData;
-  uint32_t secondData;
+  uint8_t firstData[4];
+  uint8_t secondData[4];
 } CANTxBuf;
 
 typedef struct CAN_EXT_FILTER
@@ -45,7 +46,7 @@ typedef struct CAN_EXT_FILTER
   FilterType type;
 } CANExtFilter;
 
-typedef void (*CANCallback)(uint8_t);
+typedef void (*CANCallback)(uint8_t, uint32_t);
 
 void CANInit(uint32_t *rxFifo0Start, uint32_t *rxFifo1Start, uint32_t *txBufStart, uint32_t *extendedFilterListStart, uint32_t rxFifo0Count, uint32_t rxFifo1Count, uint32_t txBufCount, uint32_t extendedFilterListCount, uint8_t *buf, CANCallback rxCallback);
 void CANSend(uint32_t mask);

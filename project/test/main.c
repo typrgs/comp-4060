@@ -70,7 +70,6 @@ int main()
     if(msCount >= flashTimestamp)
     {
       CANSend(1);
-      buf.firstData++;
       CANUpdateTxBuf(buf);
       PORT_REGS->GROUP[0].PORT_OUTTGL = PORT_PA14;
       flashTimestamp = msCount + 500;

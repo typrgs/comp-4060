@@ -153,6 +153,9 @@ void CAN1_Handler()
       wordPointer = &rxFifo1[getIndex * RX_FIFO_ELEMENT_WORDS];
     }
 
+    // get message type (from ID)
+    uint32_t id = wordPointer[0] & 0x1FFFFFFF;
+
     // mask out data length
     uint8_t dlc = (uint8_t)((wordPointer[1] & 0xF0000) >> 0x10);
 
@@ -172,7 +175,7 @@ void CAN1_Handler()
     }
     
     // invoke callback and pass data length
-    callback(dlc);
+    callback(dlc, id);
   }
 }
 
@@ -193,8 +196,8 @@ void CANUpdateTxBuf(CANTxBuf buf)
   bufToUpdate[1] = (((uint32_t)buf.dataLength) << 0x10);
 
   // update data rows
-  bufToUpdate[2] = buf.firstData;
-  bufToUpdate[3] = buf.secondData;
+  bufToUpdate[2] = *((uint32_t *)buf.firstData);
+  bufToUpdate[3] = *((uint32_t *)buf.secondData);
 }
 
 void CANUpdateFilter(CANExtFilter filter)
