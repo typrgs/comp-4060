@@ -97,7 +97,7 @@ void CANInit(uint32_t *rxFifo0Start, uint32_t *rxFifo1Start, uint32_t *txBufStar
   // configure Tx Buffer element size
   CAN1_REGS->CAN_TXESC = CAN_TXESC_TBDS_DATA8;
 
-#ifndef DNDEBUG
+#ifndef NDEBUG
   // SET TEST MODE
   CAN1_REGS->CAN_CCCR |= CAN_CCCR_TEST_Msk;
 
@@ -181,7 +181,7 @@ void CAN1_Handler()
 
 void CANUpdateTxBuf(CANTxBuf buf)
 {
-  uint32_t *bufToUpdate = (uint32_t *)(&txBuf[buf.bufIndex]);
+  uint32_t *bufToUpdate = (uint32_t *)(&txBuf[TX_BUF_ELEMENT_WORDS * buf.bufIndex]);
 
   // clear out rows to be updated
   for(int i=0; i<4; i++)
@@ -202,7 +202,7 @@ void CANUpdateTxBuf(CANTxBuf buf)
 
 void CANUpdateFilter(CANExtFilter filter)
 {
-  uint32_t *filterToUpdate = &filterList[filter.filterIndex];
+  uint32_t *filterToUpdate = (uint32_t *)&filterList[EXTENDED_FILTER_WORDS * filter.filterIndex];
 
   filterToUpdate[0] = (((uint32_t)filter.config) << 29 | filter.firstID);
   filterToUpdate[1] = (((uint32_t)filter.type) << 30 | filter.secondID);
