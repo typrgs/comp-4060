@@ -20,38 +20,27 @@ static uint32_t *rxFifoStart = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE]);
 static uint32_t *txBufStart = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE + RX_FIFO_SIZE]);
 static uint8_t rxBuf[RX_FIFO_ELEMENT_DATA_BYTES];
 
+#define BLINK_RATE 500 // ms
+#define PULSE_RATE 1000 // ms
+#define CONSENSUS_RATE 10000 // ms
+
 // store a transmit buffer per message type
 static CANTxBuf txBufs[NUM_MSG_TYPES] = {0};
 
 // store an acceptance filter per message type
 static CANExtFilter filters[NUM_MSG_TYPES] = {0};
 
-static uint8_t deviceID;
+static uint8_t myID;
+static uint32_t activePeers[UINT8_MAX] = {0};
 
-static Block blockchain[512] = {0};
-
-
-static void rxCallback(uint8_t len, uint32_t id)
-{
-  if(id == PULSE)
-  {
-    dbg_write_str("Pulse from: ");
-    dbg_write_u8(rxBuf, len);
-    dbg_write_char('\n');
-  }
-  else if(id == CONSENSUS)
-  {
-    dbg_write_str("Sharing blocks with ");
-    dbg_write_u8(rxBuf, len);
-    dbg_write_char('\n');
-  }
-}
+static Block blockchain[UINT8_MAX * 2] = {0};
+static uint16_t height = 0;
 
 static void readParams()
 {
   // save device ID given in flash parameters
   uint8_t *params = (uint8_t *)0x000fe000;
-  deviceID = params[0];
+  myID = params[0];
 
   // this parameter indicates whether this node should define the genesis block on startup
   if(params[1])
@@ -60,6 +49,7 @@ static void readParams()
     blockchain[0].transaction.amt = 0;
     blockchain[0].transaction.srcID = 0;
     blockchain[0].transaction.destID = 0;
+    height++;
   }
 }
 
@@ -97,7 +87,7 @@ static void setupTxBufs()
     txBufs[i].bufIndex = i;
     txBufs[i].id = i;
     txBufs[i].dataLength = 1;
-    txBufs[i].data[0] = deviceID;
+    txBufs[i].data[0] = myID;
     
     if(i == BLOCK || i == NEW_BLOCK)
     {
@@ -106,6 +96,64 @@ static void setupTxBufs()
 
     CANUpdateTxBuf(txBufs[i]);
   }
+}
+
+
+static void markActivePeer(uint8_t peerID)
+{
+  if(!activePeers[peerID])
+  {
+    activePeers[peerID] = elapsedMS();
+  }
+}
+
+
+static void rxCallback(uint8_t len, uint32_t id)
+{
+  if(id == PULSE)
+  {
+    dbg_write_str("Pulse from: ");
+    dbg_write_u8(rxBuf, len);
+    dbg_write_char('\n');
+
+    // mark peer as active
+    markActivePeer(rxBuf[0]);
+  }
+  else if(id == CONSENSUS)
+  {
+    uint8_t srcID = rxBuf[0];
+
+    markActivePeer(srcID);
+
+    dbg_write_str("Sharing blocks with ");
+    dbg_write_u8(&srcID, 1);
+    dbg_write_char('\n');
+    
+    // setup ack buffer to send to src peer
+    uint8_t *idPtr = (uint8_t *)&(txBufs[ACK].id);
+    idPtr[0] = ACK;
+    idPtr[1] = srcID;
+    txBufs[ACK].dataLength = 1;
+    txBufs[ACK].data[0] = myID;
+    CANSend((1 << ACK));
+  }
+}
+
+static void peerCheck(uint32_t timeNow)
+{
+  for(int i=0; i<UINT8_MAX; i++)
+  {
+    // check if the peer has been recently active, and if they have sent a pulse within 2 pulse periods
+    if(activePeers[i] && (timeNow - activePeers[i] > (PULSE_RATE * 2)))
+    {
+      activePeers[i] = 0;
+    }
+  }
+}
+
+static void consensus()
+{
+
 }
 
 int main()
@@ -133,16 +181,33 @@ int main()
   PORT_REGS->GROUP[0].PORT_OUTSET = PORT_PA14;
   
   uint32_t flashTimestamp = 0;
-  
+  uint32_t pulseTimestamp = 0;
+  uint32_t consensusTimestamp = 0;
+  uint32_t peerCheckTimestamp = 0;
+
   for(;;)
   {
     uint32_t msCount = elapsedMS();
-    
+
+    if(msCount >= pulseTimestamp)
+    {
+      CANSend((1 << PULSE));
+      pulseTimestamp = msCount + PULSE_RATE;
+    }
+    if(msCount >= consensusTimestamp)
+    {
+      consensus();
+      consensusTimestamp = msCount + CONSENSUS_RATE;
+    }
+    if(msCount >= peerCheckTimestamp)
+    {
+      peerCheck(msCount);
+      peerCheckTimestamp = msCount + (PULSE_RATE * 2);
+    }
     if(msCount >= flashTimestamp)
     {
-      CANSend(3);
       PORT_REGS->GROUP[0].PORT_OUTTGL = PORT_PA14;
-      flashTimestamp = msCount + 500;
+      flashTimestamp = msCount + BLINK_RATE;
     }
   }
 
