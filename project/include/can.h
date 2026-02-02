@@ -39,8 +39,8 @@ typedef struct CAN_TX_BUF
 typedef struct CAN_EXT_FILTER
 {
   uint8_t filterIndex;
-  uint32_t firstID;
-  uint32_t secondID;
+  uint8_t firstID[4];
+  uint8_t secondID[4];
   FilterConfig config;
   FilterType type;
 } CANExtFilter;

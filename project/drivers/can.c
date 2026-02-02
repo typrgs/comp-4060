@@ -205,6 +205,6 @@ void CANUpdateFilter(CANExtFilter filter)
 {
   uint32_t *filterToUpdate = (uint32_t *)&filterList[EXTENDED_FILTER_WORDS * filter.filterIndex];
 
-  filterToUpdate[0] = (((uint32_t)filter.config) << 29 | filter.firstID);
-  filterToUpdate[1] = (((uint32_t)filter.type) << 30 | filter.secondID);
+  filterToUpdate[0] = (((uint32_t)filter.config) << 29 | (*(uint32_t *)filter.firstID));
+  filterToUpdate[1] = (((uint32_t)filter.type) << 30 | *(uint32_t *)filter.secondID);
 }
