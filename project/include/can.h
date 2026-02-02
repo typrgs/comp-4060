@@ -48,6 +48,6 @@ typedef struct CAN_EXT_FILTER
 typedef void (*CANCallback)(uint8_t, uint32_t);
 
 void CANInit(uint32_t *rxFifo0Start, uint32_t *rxFifo1Start, uint32_t *txBufStart, uint32_t *extendedFilterListStart, uint32_t rxFifo0Count, uint32_t rxFifo1Count, uint32_t txBufCount, uint32_t extendedFilterListCount, uint8_t *buf, CANCallback rxCallback);
-void CANSend(uint32_t mask);
+void CANSend(uint8_t index);
 void CANUpdateTxBuf(CANTxBuf buf);
 void CANUpdateFilter(CANExtFilter filter);

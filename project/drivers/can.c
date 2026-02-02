@@ -109,10 +109,10 @@ void CANInit(uint32_t *rxFifo0Start, uint32_t *rxFifo1Start, uint32_t *txBufStar
   while((CAN1_REGS->CAN_CCCR & CAN_CCCR_INIT_Msk) != 0);
 }
 
-void CANSend(uint32_t mask)
+void CANSend(uint8_t index)
 {
-  // do a send of all transmit buffers defined in the passed mask
-  CAN1_REGS->CAN_TXBAR = mask;
+  // do a send the buffer described by index
+  CAN1_REGS->CAN_TXBAR = (1 << index);
   
   // wait for all transmits to finish
   while((CAN1_REGS->CAN_TXBRP & CAN_TXBRP_Msk) != 0);
