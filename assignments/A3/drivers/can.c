@@ -15,24 +15,24 @@
 
 #define TC0_INIT_VALUE 41536
 
-uint8_t *asyncBuf = NULL;
-uint8_t asyncBufPos = 0;
-CANCallback asyncDone = NULL;
-uint8_t asyncSize = 0;
+static uint8_t *asyncBuf = NULL;
+static uint8_t asyncBufPos = 0;
+static CANCallback asyncDone = NULL;
+static uint8_t asyncSize = 0;
 
-bool sensing = false;
-bool transmitting = false;
-uint8_t byteReceived = 0;
-bool newByteReceived = false;
-bool receivedWhileSensing = false;
+static bool sensing = false;
+static bool transmitting = false;
+static uint8_t byteReceived = 0;
+static bool newByteReceived = false;
+static bool receivedWhileSensing = false;
 
 // doing linear backoff, start at 1 and increment on each collision
-uint8_t backoffMult = 1;
+static uint8_t backoffMult = 1;
 #define BACKOFF_MULT_CAP 10
 #define BACKOFF_MAX 10
 #define BACKOFF_MIN 1
 
-uint16_t tcOvfCount = 0;
+static uint16_t tcOvfCount = 0;
 
 typedef enum RX_RESULT
 {
@@ -42,7 +42,7 @@ typedef enum RX_RESULT
   NUM_RESULTS
 } RxResult;
 
-volatile RxResult asyncProcessResult = NONE;
+static volatile RxResult asyncProcessResult = NONE;
 
 typedef enum RX_STATE
 {
@@ -55,18 +55,18 @@ typedef enum RX_STATE
   NUM_STATES
 } RxState;
 
-volatile RxState rxCurrState = IDLE;
+static volatile RxState rxCurrState = IDLE;
 
 // state function prototypes
-RxState rxIdle(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize);
-RxState rxSearch(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize);
-RxState rxStart(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize);
-RxState rxStuff(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize);
-RxState rxData(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize);
-RxState rxEnd(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize);
+static RxState rxIdle(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize);
+static RxState rxSearch(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize);
+static RxState rxStart(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize);
+static RxState rxStuff(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize);
+static RxState rxData(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize);
+static RxState rxEnd(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize);
 
 // state function array
-RxState (*rxStates[NUM_STATES])(uint8_t, uint8_t *, uint8_t *, uint8_t) = {rxIdle, rxSearch, rxStart, rxStuff, rxData, rxEnd};
+static RxState (*rxStates[NUM_STATES])(uint8_t, uint8_t *, uint8_t *, uint8_t) = {rxIdle, rxSearch, rxStart, rxStuff, rxData, rxEnd};
 
 static void tc0Init()
 {
@@ -226,6 +226,35 @@ static bool transmitByte(uint8_t byte)
   return result;
 }
 
+void backoff()
+{
+  transmitting = false;
+
+  // do backoff
+  // wait for random data to be ready
+  while((TRNG_REGS->TRNG_INTFLAG & TRNG_INTFLAG_DATARDY_Msk) == 0);
+  uint32_t randVal = TRNG_REGS->TRNG_DATA;
+
+  // get number from 1 to 10, used for ms delay
+  randVal = (randVal % BACKOFF_MAX) + BACKOFF_MIN;
+  randVal *= backoffMult;
+
+  // increase backoff multiplier if not at the cap
+  if(backoffMult < BACKOFF_MULT_CAP)
+  {
+    backoffMult++;
+  }
+
+  // start timer for timeout
+  tc0Enable();
+
+  // wait for timeout
+  while(tcOvfCount < randVal);
+
+  // disable timer when done
+  tc0Disable();
+}
+
 bool CANSendBytes(uint8_t const * const bytes, uint16_t size)
 {
   bool result = true;
@@ -255,17 +284,20 @@ bool CANSendBytes(uint8_t const * const bytes, uint16_t size)
     // wait for a byte to come in or reach timeout
     while(!receivedWhileSensing && tcOvfCount < TX_POLL_TIMEOUT);
 
-    // reset flag and ovf count if a byte is received before reaching timeout
-    if(receivedWhileSensing)
+    // stop timer when we exit the above loop to check the ovf value without it potentially changing
+    tc0Disable();
+
+    // reset flag and ovf count if a byte is received before reaching timeout, start timer again
+    if(tcOvfCount < TX_POLL_TIMEOUT)
     {
       tcOvfCount = 0;
+      tc0Enable();
     }
   }
   
   // update flags in this order to prevent RX interrupt from processing any stray byte, causing the state machine to transition
   transmitting = true;
   sensing = false;
-  tc0Disable();
 
   // begin transmitting bytes
   crcInit();
@@ -290,17 +322,6 @@ bool CANSendBytes(uint8_t const * const bytes, uint16_t size)
     crcNextByte(bytes[i]);
     if(!transmitByte(bytes[i]))
       goto backoff;
-  }
-
-  // if the given bytes is smaller than a packet, transmit 0x00 to fill in remaining bytes
-  if(size < PROTOCOL_PACKET_SIZE)
-  {
-    for(uint16_t i=0; i<(PROTOCOL_PACKET_SIZE - size); i++)
-    {
-      crcNextByte(0);
-      if(!transmitByte(0))
-        goto backoff;
-    }
   }
 
   // transmit CRC
@@ -343,32 +364,8 @@ bool CANSendBytes(uint8_t const * const bytes, uint16_t size)
   goto finish;
 
 backoff:
-  transmitting = false;
+  backoff();
   result = false;
-
-  // do backoff
-  // wait for random data to be ready
-  while((TRNG_REGS->TRNG_INTFLAG & TRNG_INTFLAG_DATARDY_Msk) == 0);
-  uint32_t randVal = TRNG_REGS->TRNG_DATA;
-
-  // get number from 1 to 10, used for ms delay
-  randVal = (randVal % BACKOFF_MAX) + BACKOFF_MIN;
-  randVal *= backoffMult;
-
-  // increase backoff multiplier if not at the cap
-  if(backoffMult < BACKOFF_MULT_CAP)
-  {
-    backoffMult++;
-  }
-
-  // start timer for timeout
-  tc0Enable();
-
-  // wait for timeout
-  while(tcOvfCount < randVal);
-
-  // disable timer when done
-  tc0Disable();
 
 finish:
   return result;
@@ -377,7 +374,7 @@ finish:
 
 /*************** RX State Machine ******************/
 
-RxState rxIdle(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
+static RxState rxIdle(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
 {
   RxState nextState = IDLE;
 
@@ -389,7 +386,7 @@ RxState rxIdle(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expected
   return nextState;
 }
 
-RxState rxSearch(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
+static RxState rxSearch(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
 {
   RxState nextState = IDLE;
 
@@ -407,7 +404,7 @@ RxState rxSearch(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expect
   return nextState;
 }
 
-RxState rxStart(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
+static RxState rxStart(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
 {
   RxState nextState = DATA;
 
@@ -427,7 +424,7 @@ RxState rxStart(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expecte
   return nextState;
 }
 
-RxState rxStuff(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
+static RxState rxStuff(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
 {
   RxState nextState = IDLE;
 
@@ -455,7 +452,7 @@ RxState rxStuff(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expecte
   return nextState;
 }
 
-RxState rxData(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
+static RxState rxData(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
 {
   RxState nextState = DATA;
 
@@ -475,7 +472,7 @@ RxState rxData(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expected
   return nextState;
 }
 
-RxState rxEnd(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
+static RxState rxEnd(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
 {
   RxState nextState = IDLE;
 
@@ -487,7 +484,7 @@ RxState rxEnd(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedS
   return nextState;
 }
 
-RxResult rxProcessState(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
+static RxResult rxProcessState(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
 {
   RxResult result = NONE;
   RxState nextState = rxStates[rxCurrState](nextByte, buf, bufPos, expectedSize);
