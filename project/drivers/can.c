@@ -189,8 +189,9 @@ void CANUpdateTxBuf(CANTxBuf buf)
     bufToUpdate[i] = 0;
   }
   
-  buf.id &= 0x1FFFFFFF; // clear out top 3 bits of new ID just in case
-  bufToUpdate[0] = ((0b010 << 29) | buf.id); // update first row
+  uint32_t id = *((uint32_t *)buf.id); // address id field as 32-bits rather than 8-bit array
+  id &= 0x1FFFFFFF; // clear out top 3 bits of new ID just in case
+  bufToUpdate[0] = ((0b010 << 29) | id); // update first row
 
   // update data length
   bufToUpdate[1] = (((uint32_t)buf.dataLength) << 0x10);

@@ -31,7 +31,7 @@ typedef enum FILTER_TYPE
 typedef struct CAN_TX_BUF
 {
   uint8_t bufIndex;
-  uint32_t id;
+  uint8_t id[4];
   uint8_t dataLength;
   uint8_t data[8];
 } CANTxBuf;

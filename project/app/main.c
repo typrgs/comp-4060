@@ -85,7 +85,7 @@ static void setupTxBufs()
   for(MsgType i=0; i<NUM_MSG_TYPES; i++)
   {
     txBufs[i].bufIndex = i;
-    txBufs[i].id = i;
+    txBufs[i].id[0] = i;
     txBufs[i].dataLength = 1;
     txBufs[i].data[0] = myID;
     
@@ -130,9 +130,8 @@ static void rxCallback(uint8_t len, uint32_t id)
     dbg_write_char('\n');
     
     // setup ack buffer to send to src peer
-    uint8_t *idPtr = (uint8_t *)&(txBufs[ACK].id);
-    idPtr[0] = ACK;
-    idPtr[1] = srcID;
+    txBufs[ACK].id[0] = ACK;
+    txBufs[ACK].id[1] = srcID;
     txBufs[ACK].dataLength = 1;
     txBufs[ACK].data[0] = myID;
     CANSend((1 << ACK));
