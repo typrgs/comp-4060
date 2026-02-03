@@ -40,9 +40,10 @@ static uint16_t height = 0;
 
 // state variables
 static bool doingConsensus = false;
-static uint8_t consensusPeerID = 0;
 static uint8_t partialBlock[sizeof(Block)];
 static uint8_t partialBlockPos = 0;
+
+static uint32_t blockchainBytesPos = 0;
 
 
 static void readParams()
@@ -66,16 +67,18 @@ static void setupFilters()
 {
   // pulse filter
   filters[PULSE].filterIndex = PULSE;
-  filters[PULSE].firstID[0] = PULSE;
-  filters[PULSE].firstID[1] = BROADCAST_ID;
+  filters[PULSE].firstID[ID_MSG_TYPE_Pos] = PULSE;
+  filters[PULSE].firstID[ID_SENDER_Pos] = BROADCAST_ID;
+  filters[PULSE].firstID[ID_RECEIVER_Pos] = BROADCAST_ID;
   filters[PULSE].config = STF0M;
   filters[PULSE].type = CLASSIC;
   CANUpdateFilter(filters[PULSE]);
 
   // consensus filter
   filters[CONSENSUS].filterIndex = CONSENSUS;
-  filters[CONSENSUS].firstID[0] = CONSENSUS;
-  filters[CONSENSUS].firstID[1] = BROADCAST_ID;
+  filters[CONSENSUS].firstID[ID_MSG_TYPE_Pos] = CONSENSUS;
+  filters[CONSENSUS].firstID[ID_SENDER_Pos] = BROADCAST_ID;
+  filters[CONSENSUS].firstID[ID_RECEIVER_Pos] = BROADCAST_ID;
   filters[CONSENSUS].config = STF0M;
   filters[CONSENSUS].type = CLASSIC;
   CANUpdateFilter(filters[CONSENSUS]);
@@ -84,7 +87,8 @@ static void setupFilters()
   for(MsgType i=SHARE; i<NUM_MSG_TYPES; i++)
   {
     filters[i].filterIndex = i;
-    filters[i].firstID[1] = i;
+    filters[i].firstID[ID_MSG_TYPE_Pos] = i;
+    filters[i].firstID[ID_RECEIVER_Pos] = myID;
     filters[i].config = DISABLE;
     filters[i].type = CLASSIC;
     CANUpdateFilter(filters[i]);
@@ -96,26 +100,17 @@ static void setupTxBufs()
   for(MsgType i=0; i<NUM_MSG_TYPES; i++)
   {
     txBufs[i].bufIndex = i;
-    txBufs[i].id[0] = i;
-    txBufs[i].dataLength = 1;
-    txBufs[i].data[0] = myID;
-    
-    if(i == BLOCK)
-    {
-      txBufs[i].dataLength += sizeof(Block);
-    }
+    txBufs[i].id[ID_MSG_TYPE_Pos] = i;
+    txBufs[i].id[ID_SENDER_Pos] = myID;
+    txBufs[i].dataLength = 0;
 
     CANUpdateTxBuf(txBufs[i]);
   }
 }
 
-
 static void markActivePeer(uint8_t peerID)
 {
-  if(!activePeers[peerID])
-  {
-    activePeers[peerID] = elapsedMS();
-  }
+  activePeers[peerID] = elapsedMS();
 }
 
 static bool verifyBlock(Block toVerify)
@@ -149,8 +144,9 @@ static bool verifyBlock(Block toVerify)
 static void rxCallback(uint8_t len, uint32_t id)
 {
   uint8_t *idAsBytes = (uint8_t *)&id;
-  MsgType type = idAsBytes[0];
-  uint8_t header = idAsBytes[2];
+  MsgType type = idAsBytes[ID_MSG_TYPE_Pos];
+  uint8_t senderID = idAsBytes[ID_SENDER_Pos];
+  uint8_t header = idAsBytes[ID_HEADER_Pos] & 0x1F;
 
   if(type == PULSE)
   {
@@ -172,65 +168,151 @@ static void rxCallback(uint8_t len, uint32_t id)
     dbg_write_char('\n');
     
     // setup ack buffer to send to src peer
-    txBufs[ACK].id[0] = ACK;
-    txBufs[ACK].id[1] = srcID;
-    txBufs[ACK].id[2] = CONSENSUS;
+    txBufs[ACK].id[ID_MSG_TYPE_Pos] = ACK;
+    txBufs[ACK].id[ID_SENDER_Pos] = BROADCAST_ID;
+    txBufs[ACK].id[ID_RECEIVER_Pos] = srcID;
+    txBufs[ACK].id[ID_HEADER_Pos] |= CONSENSUS;
     txBufs[ACK].dataLength = 1;
     txBufs[ACK].data[0] = myID;
-
-    // send ack
+    CANUpdateTxBuf(txBufs[ACK]);
     CANSend(ACK);
   }
   else if(type == ACK)
   {
-    uint8_t srcID = rxBuf[0];
-
     if(header == CONSENSUS)
     {
-      markActivePeer(srcID);
+      uint8_t ackID = rxBuf[0];
+      markActivePeer(ackID);
 
-      // save peer ID for upcoming communications
-      consensusPeerID = srcID;
+      // once ack received, setup share tx buffer and filter, send share to begin receiving blocks
+
+      // disable ack filter
+      filters[ACK].config = DISABLE;
+      CANUpdateFilter(filters[ACK]);
+
+      // setup share buffer
+      txBufs[SHARE].id[ID_MSG_TYPE_Pos] = SHARE;
+      txBufs[SHARE].id[ID_SENDER_Pos] = myID;
+      txBufs[SHARE].id[ID_RECEIVER_Pos] = ackID;
+      txBufs[SHARE].dataLength = 1;
+      txBufs[SHARE].data[0] = myID;
+      CANUpdateTxBuf(txBufs[SHARE]);
+
+      // setup block filter
+      filters[BLOCK].firstID[ID_MSG_TYPE_Pos] = BLOCK;
+      filters[BLOCK].firstID[ID_SENDER_Pos] = ackID;
+      filters[BLOCK].firstID[ID_RECEIVER_Pos] = myID;
+      filters[BLOCK].firstID[ID_HEADER_Pos] |= SHARE;
+      filters[BLOCK].config = STF0M;
+      filters[BLOCK].type = CLASSIC;
+      CANUpdateFilter(filters[BLOCK]);
+
+      // send share request
+      CANSend(SHARE);
     }
     else if(header == BLOCK)
     {
-      // on block ack, send next block portion
+      // on block ack, send next block portion if there is more to send
+      uint32_t currBytePos = ((uint32_t *)rxBuf)[0];
 
-      // if last portion already sent, send end response
+      if(currBytePos < sizeof(Block) * height)
+      {
+        txBufs[BLOCK].id[ID_MSG_TYPE_Pos] = BLOCK;
+        txBufs[BLOCK].id[ID_SENDER_Pos] = myID;
+        txBufs[BLOCK].id[ID_RECEIVER_Pos] = senderID;
+        txBufs[BLOCK].id[ID_HEADER_Pos] |= SHARE;
+  
+        uint8_t *blockchainBytesPtr = (uint8_t *)&blockchain;
+        uint32_t oldBytesPos = currBytePos;
+  
+        for(int i=0; i<RX_FIFO_ELEMENT_DATA_BYTES && currBytePos < sizeof(Block) * height; i++)
+        {
+          txBufs[BLOCK].data[i] = blockchainBytesPtr[currBytePos++];
+        }
+  
+        txBufs[BLOCK].dataLength = currBytePos - oldBytesPos;
+        CANUpdateTxBuf(txBufs[BLOCK]);
+        CANSend(BLOCK);
+      }
+      else
+      {
+        // if entire blockchain already sent, send end response
+        txBufs[END].id[ID_MSG_TYPE_Pos] = END;
+        txBufs[END].id[ID_SENDER_Pos] = myID;
+        txBufs[END].id[ID_RECEIVER_Pos] = senderID;
+        txBufs[END].id[ID_HEADER_Pos] |= CONSENSUS;
+        txBufs[END].dataLength = 0;
+        CANUpdateTxBuf(txBufs[END]);
+        CANSend(END);
+      }
     }
   }
   else if(type == BLOCK)
   {
-    // build block from received data
-    for(int i=1; i<len; i++)
+    if(header == SHARE)
     {
-      partialBlock[partialBlockPos++] = rxBuf[i];
-    }
-
-    if(partialBlockPos == sizeof(Block))
-    {
-      // add block to chain if verification returns true
-      Block tempBlock = *((Block *)partialBlock);
-      if(verifyBlock(tempBlock))
+      // build block from received data
+      for(int i=0; i<len; i++)
       {
-        blockchain[height++] = tempBlock;
+        partialBlock[partialBlockPos++] = rxBuf[i];
+        blockchainBytesPos++;
+      }
+  
+      // check if a full block has been constructed
+      if(partialBlockPos == sizeof(Block))
+      {
+        // add block to chain if verification returns true
+        Block tempBlock = *((Block *)partialBlock);
+        if(verifyBlock(tempBlock))
+        {
+          blockchain[height++] = tempBlock;
+        }
+  
+        // reset partial block buffer
+        for(int i=0; i<sizeof(Block); i++)
+        {
+          partialBlock[i] = 0;
+        }
+        partialBlockPos = 0;
       }
 
-      // reset partial block buffer
-      for(int i=0; i<sizeof(Block); i++)
-      {
-        partialBlock[i] = 0;
-      }
-      partialBlockPos = 0;
+      // send block ack, with current blockchain byte position
+      txBufs[ACK].id[ID_MSG_TYPE_Pos] = ACK;
+      txBufs[ACK].id[ID_SENDER_Pos] = myID;
+      txBufs[ACK].id[ID_RECEIVER_Pos] = senderID;
+      txBufs[ACK].id[ID_HEADER_Pos] |= BLOCK;
+      txBufs[ACK].dataLength = 4;
+      *((uint32_t *)txBufs[ACK].data) = blockchainBytesPos;
+      CANUpdateTxBuf(txBufs[ACK]);
+      CANSend(ACK);
     }
   }
   else if(type == SHARE)
   {
-    // send first block in chain
+    // start sending first block in chain
+
+    // setup block buffer
+    txBufs[BLOCK].id[ID_MSG_TYPE_Pos] = BLOCK;
+    txBufs[BLOCK].id[ID_SENDER_Pos] = myID;
+    txBufs[BLOCK].id[ID_RECEIVER_Pos] = senderID;
+    txBufs[BLOCK].id[ID_HEADER_Pos] |= SHARE;
+    
+    uint8_t *blockchainBytesPtr = (uint8_t *)&blockchain;
+
+    // place as many bytes as can fit into the message
+    for(int i=0; i<RX_FIFO_ELEMENT_DATA_BYTES; i++)
+    {
+      txBufs[BLOCK].data[i] = blockchainBytesPtr[blockchainBytesPos++];
+    }
+
+    txBufs[BLOCK].dataLength = RX_FIFO_ELEMENT_DATA_BYTES;
+    CANUpdateTxBuf(txBufs[BLOCK]);
+    CANSend(BLOCK);
   }
   else if(type == END)
   {
     doingConsensus = false;
+    blockchainBytesPos = 0;
   }
 }
 
@@ -255,51 +337,31 @@ static void consensus()
   }
 
   // setup ack filter
-  filters[ACK].firstID[0] = ACK;
-  filters[ACK].firstID[1] = myID;
+  filters[ACK].firstID[ID_MSG_TYPE_Pos] = ACK;
+  filters[ACK].firstID[ID_SENDER_Pos] = BROADCAST_ID;
+  filters[ACK].firstID[ID_RECEIVER_Pos] = myID;
+  filters[ACK].firstID[ID_HEADER_Pos] |= CONSENSUS;
   filters[ACK].config = STF0M;
   filters[ACK].type = CLASSIC;
   CANUpdateFilter(filters[ACK]);
 
   // setup consensus buffer
-  txBufs[CONSENSUS].id[0] = CONSENSUS;
-  txBufs[CONSENSUS].id[1] = BROADCAST_ID;
+  txBufs[CONSENSUS].id[ID_MSG_TYPE_Pos] = CONSENSUS;
+  txBufs[CONSENSUS].id[ID_SENDER_Pos] = BROADCAST_ID;
+  txBufs[CONSENSUS].id[ID_RECEIVER_Pos] = BROADCAST_ID;
   txBufs[CONSENSUS].dataLength = 1;
   txBufs[CONSENSUS].data[0] = myID;
   CANUpdateTxBuf(txBufs[CONSENSUS]);
 
   // broadcast consensus request until we get a response
-  while(consensusPeerID == 0)
+  while(!doingConsensus)
   {
     CANSend(CONSENSUS);
     
     // delay for a bit before re-broadcasting the consensus request
     uint32_t now = elapsedMS();
-    while((consensusPeerID == 0) && (elapsedMS() - now < CONSENSUS_RESEND_TIMEOUT));
+    while(!doingConsensus && (elapsedMS() - now < CONSENSUS_RESEND_TIMEOUT));
   }
-  
-  // once ack received, setup share tx buffer and filter, send share to begin receiving blocks
-
-  // disable ack filter
-  filters[ACK].config = DISABLE;
-  CANUpdateFilter(filters[ACK]);
-
-  // setup share buffer
-  txBufs[SHARE].id[0] = SHARE;
-  txBufs[SHARE].id[1] = consensusPeerID;
-  txBufs[SHARE].dataLength = 1;
-  txBufs[SHARE].data[0] = myID;
-  CANUpdateTxBuf(txBufs[SHARE]);
-
-  // setup block filter
-  filters[BLOCK].firstID[0] = BLOCK;
-  filters[BLOCK].firstID[1] = myID;
-  filters[BLOCK].config = STF0M;
-  filters[BLOCK].type = CLASSIC;
-  CANUpdateFilter(filters[BLOCK]);
-
-  // send share request
-  CANSend(SHARE);
 
   // spin here while we receive blocks asynchronously and verify the chain, only finishing once we receive an end message
   while(doingConsensus);
