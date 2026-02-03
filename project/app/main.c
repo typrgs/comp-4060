@@ -4,7 +4,7 @@
 #include "net.h"
 #include "blockchain.h"
 
-#define EXTENDED_FILTER_COUNT 1
+#define EXTENDED_FILTER_COUNT NUM_MSG_TYPES
 #define RX_FIFO_ELEMENT_COUNT 10
 #define TX_BUF_ELEMENT_COUNT NUM_MSG_TYPES
 
@@ -63,35 +63,43 @@ static void readParams()
   }
 }
 
+static void updateTxBuf(MsgType type, uint8_t senderID, uint8_t receiverID, uint8_t header, uint8_t dataLength, uint8_t *data)
+{
+  txBufs[type].bufIndex = type;
+  txBufs[type].id[ID_SENDER_Pos] = senderID;
+  txBufs[type].id[ID_RECEIVER_Pos] = receiverID;
+  txBufs[type].id[ID_HEADER_Pos] |= header;
+  txBufs[type].dataLength = dataLength;
+  if(data != NULL && dataLength > 0)
+  {
+    *(uint64_t *)txBufs[type].data = *((uint64_t *)data);
+  }
+  CANUpdateTxBuf(txBufs[type]);
+}
+
+static void updateFilter(MsgType msgType, uint8_t senderID, uint8_t receiverID, uint8_t header, FilterConfig config)
+{
+  filters[msgType].filterIndex = msgType;
+  filters[msgType].firstID[ID_SENDER_Pos] = senderID;
+  filters[msgType].firstID[ID_RECEIVER_Pos] = receiverID;
+  filters[msgType].firstID[ID_HEADER_Pos] |= header;
+  filters[msgType].config = config;
+  filters[msgType].type = CLASSIC;
+  CANUpdateFilter((filters[msgType]));
+}
+
 static void setupFilters()
 {
   // pulse filter
-  filters[PULSE].filterIndex = PULSE;
-  filters[PULSE].firstID[ID_MSG_TYPE_Pos] = PULSE;
-  filters[PULSE].firstID[ID_SENDER_Pos] = BROADCAST_ID;
-  filters[PULSE].firstID[ID_RECEIVER_Pos] = BROADCAST_ID;
-  filters[PULSE].config = STF0M;
-  filters[PULSE].type = CLASSIC;
-  CANUpdateFilter(filters[PULSE]);
+  updateFilter(PULSE, PULSE, BROADCAST_ID, BROADCAST_ID, STF0M);
 
   // consensus filter
-  filters[CONSENSUS].filterIndex = CONSENSUS;
-  filters[CONSENSUS].firstID[ID_MSG_TYPE_Pos] = CONSENSUS;
-  filters[CONSENSUS].firstID[ID_SENDER_Pos] = BROADCAST_ID;
-  filters[CONSENSUS].firstID[ID_RECEIVER_Pos] = BROADCAST_ID;
-  filters[CONSENSUS].config = STF0M;
-  filters[CONSENSUS].type = CLASSIC;
-  CANUpdateFilter(filters[CONSENSUS]);
+  updateFilter(CONSENSUS, CONSENSUS, BROADCAST_ID, BROADCAST_ID, STF0M);
 
   // set up all other filters to be initially disabled
   for(MsgType i=SHARE; i<NUM_MSG_TYPES; i++)
   {
-    filters[i].filterIndex = i;
-    filters[i].firstID[ID_MSG_TYPE_Pos] = i;
-    filters[i].firstID[ID_RECEIVER_Pos] = myID;
-    filters[i].config = DISABLE;
-    filters[i].type = CLASSIC;
-    CANUpdateFilter(filters[i]);
+    updateFilter(i, i, myID, 0, DISABLE);
   }
 }
 
@@ -99,14 +107,10 @@ static void setupTxBufs()
 {
   for(MsgType i=0; i<NUM_MSG_TYPES; i++)
   {
-    txBufs[i].bufIndex = i;
-    txBufs[i].id[ID_MSG_TYPE_Pos] = i;
-    txBufs[i].id[ID_SENDER_Pos] = myID;
-    txBufs[i].dataLength = 0;
-
-    CANUpdateTxBuf(txBufs[i]);
+    updateTxBuf(i, myID, BROADCAST_ID, 0, 0, NULL);
   }
 }
+
 
 static void markActivePeer(uint8_t peerID)
 {
@@ -159,22 +163,19 @@ static void rxCallback(uint8_t len, uint32_t id)
   }
   else if(type == CONSENSUS)
   {
-    uint8_t srcID = rxBuf[0];
+    uint8_t consensusReqID = rxBuf[0];
 
-    markActivePeer(srcID);
+    markActivePeer(consensusReqID);
 
     dbg_write_str("Sharing blocks with ");
-    dbg_write_u8(&srcID, 1);
+    dbg_write_u8(&consensusReqID, 1);
     dbg_write_char('\n');
+
+    // setup share filter
+    updateFilter(SHARE, consensusReqID, myID, 0, STF0M);
     
     // setup ack buffer to send to src peer
-    txBufs[ACK].id[ID_MSG_TYPE_Pos] = ACK;
-    txBufs[ACK].id[ID_SENDER_Pos] = BROADCAST_ID;
-    txBufs[ACK].id[ID_RECEIVER_Pos] = srcID;
-    txBufs[ACK].id[ID_HEADER_Pos] |= CONSENSUS;
-    txBufs[ACK].dataLength = 1;
-    txBufs[ACK].data[0] = myID;
-    CANUpdateTxBuf(txBufs[ACK]);
+    updateTxBuf(ACK, BROADCAST_ID, consensusReqID, CONSENSUS, 1, &myID);
     CANSend(ACK);
   }
   else if(type == ACK)
@@ -191,21 +192,10 @@ static void rxCallback(uint8_t len, uint32_t id)
       CANUpdateFilter(filters[ACK]);
 
       // setup share buffer
-      txBufs[SHARE].id[ID_MSG_TYPE_Pos] = SHARE;
-      txBufs[SHARE].id[ID_SENDER_Pos] = myID;
-      txBufs[SHARE].id[ID_RECEIVER_Pos] = ackID;
-      txBufs[SHARE].dataLength = 1;
-      txBufs[SHARE].data[0] = myID;
-      CANUpdateTxBuf(txBufs[SHARE]);
+      updateTxBuf(SHARE, myID, ackID, 0, 1, &myID);
 
       // setup block filter
-      filters[BLOCK].firstID[ID_MSG_TYPE_Pos] = BLOCK;
-      filters[BLOCK].firstID[ID_SENDER_Pos] = ackID;
-      filters[BLOCK].firstID[ID_RECEIVER_Pos] = myID;
-      filters[BLOCK].firstID[ID_HEADER_Pos] |= SHARE;
-      filters[BLOCK].config = STF0M;
-      filters[BLOCK].type = CLASSIC;
-      CANUpdateFilter(filters[BLOCK]);
+      updateFilter(BLOCK, ackID, myID, SHARE, STF0M);
 
       // send share request
       CANSend(SHARE);
@@ -217,32 +207,23 @@ static void rxCallback(uint8_t len, uint32_t id)
 
       if(currBytePos < sizeof(Block) * height)
       {
-        txBufs[BLOCK].id[ID_MSG_TYPE_Pos] = BLOCK;
-        txBufs[BLOCK].id[ID_SENDER_Pos] = myID;
-        txBufs[BLOCK].id[ID_RECEIVER_Pos] = senderID;
-        txBufs[BLOCK].id[ID_HEADER_Pos] |= SHARE;
-  
         uint8_t *blockchainBytesPtr = (uint8_t *)&blockchain;
         uint32_t oldBytesPos = currBytePos;
   
+        // manually place block data into tx buffer data region
         for(int i=0; i<RX_FIFO_ELEMENT_DATA_BYTES && currBytePos < sizeof(Block) * height; i++)
         {
           txBufs[BLOCK].data[i] = blockchainBytesPtr[currBytePos++];
         }
-  
-        txBufs[BLOCK].dataLength = currBytePos - oldBytesPos;
-        CANUpdateTxBuf(txBufs[BLOCK]);
+
+        // use helper to update other tx buf properties
+        updateTxBuf(BLOCK, myID, senderID, SHARE, currBytePos - oldBytesPos, NULL);
         CANSend(BLOCK);
       }
       else
       {
         // if entire blockchain already sent, send end response
-        txBufs[END].id[ID_MSG_TYPE_Pos] = END;
-        txBufs[END].id[ID_SENDER_Pos] = myID;
-        txBufs[END].id[ID_RECEIVER_Pos] = senderID;
-        txBufs[END].id[ID_HEADER_Pos] |= CONSENSUS;
-        txBufs[END].dataLength = 0;
-        CANUpdateTxBuf(txBufs[END]);
+        updateTxBuf(END, myID, senderID, CONSENSUS, 0, NULL);
         CANSend(END);
       }
     }
@@ -277,13 +258,7 @@ static void rxCallback(uint8_t len, uint32_t id)
       }
 
       // send block ack, with current blockchain byte position
-      txBufs[ACK].id[ID_MSG_TYPE_Pos] = ACK;
-      txBufs[ACK].id[ID_SENDER_Pos] = myID;
-      txBufs[ACK].id[ID_RECEIVER_Pos] = senderID;
-      txBufs[ACK].id[ID_HEADER_Pos] |= BLOCK;
-      txBufs[ACK].dataLength = 4;
-      *((uint32_t *)txBufs[ACK].data) = blockchainBytesPos;
-      CANUpdateTxBuf(txBufs[ACK]);
+      updateTxBuf(ACK, myID, senderID, BLOCK, 4, (uint8_t *)&blockchainBytesPos);
       CANSend(ACK);
     }
   }
@@ -292,21 +267,7 @@ static void rxCallback(uint8_t len, uint32_t id)
     // start sending first block in chain
 
     // setup block buffer
-    txBufs[BLOCK].id[ID_MSG_TYPE_Pos] = BLOCK;
-    txBufs[BLOCK].id[ID_SENDER_Pos] = myID;
-    txBufs[BLOCK].id[ID_RECEIVER_Pos] = senderID;
-    txBufs[BLOCK].id[ID_HEADER_Pos] |= SHARE;
-    
-    uint8_t *blockchainBytesPtr = (uint8_t *)&blockchain;
-
-    // place as many bytes as can fit into the message
-    for(int i=0; i<RX_FIFO_ELEMENT_DATA_BYTES; i++)
-    {
-      txBufs[BLOCK].data[i] = blockchainBytesPtr[blockchainBytesPos++];
-    }
-
-    txBufs[BLOCK].dataLength = RX_FIFO_ELEMENT_DATA_BYTES;
-    CANUpdateTxBuf(txBufs[BLOCK]);
+    updateTxBuf(BLOCK, myID, senderID, SHARE, RX_FIFO_ELEMENT_DATA_BYTES, (uint8_t *)&blockchain);
     CANSend(BLOCK);
   }
   else if(type == END)
@@ -337,21 +298,10 @@ static void consensus()
   }
 
   // setup ack filter
-  filters[ACK].firstID[ID_MSG_TYPE_Pos] = ACK;
-  filters[ACK].firstID[ID_SENDER_Pos] = BROADCAST_ID;
-  filters[ACK].firstID[ID_RECEIVER_Pos] = myID;
-  filters[ACK].firstID[ID_HEADER_Pos] |= CONSENSUS;
-  filters[ACK].config = STF0M;
-  filters[ACK].type = CLASSIC;
-  CANUpdateFilter(filters[ACK]);
+  updateFilter(ACK, BROADCAST_ID, myID, CONSENSUS, STF0M);
 
   // setup consensus buffer
-  txBufs[CONSENSUS].id[ID_MSG_TYPE_Pos] = CONSENSUS;
-  txBufs[CONSENSUS].id[ID_SENDER_Pos] = BROADCAST_ID;
-  txBufs[CONSENSUS].id[ID_RECEIVER_Pos] = BROADCAST_ID;
-  txBufs[CONSENSUS].dataLength = 1;
-  txBufs[CONSENSUS].data[0] = myID;
-  CANUpdateTxBuf(txBufs[CONSENSUS]);
+  updateTxBuf(CONSENSUS, BROADCAST_ID, BROADCAST_ID, 0, 1, (uint8_t *)&myID);
 
   // broadcast consensus request until we get a response
   while(!doingConsensus)
