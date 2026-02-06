@@ -32,6 +32,8 @@ static CANTxBuf txBufs[NUM_MSG_TYPES] = {0};
 // store an acceptance filter per message type
 static CANExtFilter filters[NUM_MSG_TYPES] = {0};
 
+static bool startNode = false;
+
 static uint8_t myID;
 static uint32_t activePeers[UINT8_MAX] = {0};
 
@@ -55,11 +57,7 @@ static void readParams()
   // this parameter indicates whether this node should define the genesis block on startup
   if(params[1])
   {
-    blockchain[0].nonce = UINT32_MAX;
-    blockchain[0].transaction.amt = 0;
-    blockchain[0].transaction.srcID = 0;
-    blockchain[0].transaction.destID = 0;
-    height++;
+    startNode = true;
   }
 }
 
@@ -155,7 +153,7 @@ static void rxCallback(uint8_t len, uint32_t id)
   if(type == PULSE)
   {
     dbg_write_str("Pulse from: ");
-    dbg_write_u8(rxBuf, len);
+    dbg_write_u8(&senderID, 1);
     dbg_write_char('\n');
 
     // mark peer as active
@@ -320,15 +318,8 @@ static void consensus()
   setupFilters();
 }
 
-int main()
+static void startup()
 {
-#ifndef NDEBUG
-  for(int i=0; i<1000000; i++);
-#endif
-
-  // enable interrupts
-  __enable_irq();
-  
   readParams();
   icmInit();
   CANInit(rxFifoStart, NULL, txBufStart, extendedFilterStart, RX_FIFO_ELEMENT_COUNT, 0, TX_BUF_ELEMENT_COUNT, EXTENDED_FILTER_COUNT, rxBuf, rxCallback);
@@ -343,11 +334,38 @@ int main()
   // LED output
   PORT_REGS->GROUP[0].PORT_DIRSET = PORT_PA14;
   PORT_REGS->GROUP[0].PORT_OUTSET = PORT_PA14;
+
+  // start node initializes blockchain on startup, all others do consensus on startup
+  if(startNode)
+  {
+    blockchain[0].nonce = UINT32_MAX;
+    blockchain[0].transaction.amt = 0;
+    blockchain[0].transaction.srcID = 0;
+    blockchain[0].transaction.destID = 0;
+    height++;
+  }
+  else
+  {
+    consensus();
+  }
+}
+
+int main()
+{
+#ifndef NDEBUG
+  for(int i=0; i<1000000; i++);
+#endif
+
+  // enable interrupts
+  __enable_irq();
   
+  startup();
+
+  // timestamps for event scheduling
   uint32_t flashTimestamp = 0;
   uint32_t pulseTimestamp = 0;
-  uint32_t consensusTimestamp = 0;
-  uint32_t peerCheckTimestamp = 0;
+  uint32_t consensusTimestamp = CONSENSUS_RATE;
+  uint32_t peerCheckTimestamp = PULSE_RATE * 2;
 
   for(;;)
   {
@@ -363,11 +381,11 @@ int main()
       consensus();
       consensusTimestamp = msCount + CONSENSUS_RATE;
     }
-    if(msCount >= peerCheckTimestamp)
-    {
-      peerCheck(msCount);
-      peerCheckTimestamp = msCount + (PULSE_RATE * 2);
-    }
+    // if(msCount >= peerCheckTimestamp)
+    // {
+    //   peerCheck(msCount);
+    //   peerCheckTimestamp = msCount + (PULSE_RATE * 2);
+    // }
     if(msCount >= flashTimestamp)
     {
       PORT_REGS->GROUP[0].PORT_OUTTGL = PORT_PA14;

@@ -113,9 +113,6 @@ void CANSend(uint8_t index)
 {
   // do a send the buffer described by index
   CAN1_REGS->CAN_TXBAR = (1 << index);
-  
-  // wait for all transmits to finish
-  while((CAN1_REGS->CAN_TXBRP & CAN_TXBRP_Msk) != 0);
 }
 
 void CAN1_Handler()
