@@ -42,7 +42,7 @@ static uint16_t height = 0;
 
 // state variables
 static bool doingConsensus = false;
-static bool gettingBlocks = false;
+static bool gettingConsensusBlocks = false;
 static uint8_t partialBlock[sizeof(Block)];
 static uint8_t partialBlockPos = 0;
 
@@ -95,13 +95,13 @@ static void updateFilter(MsgType msgType, uint8_t senderID, uint8_t receiverID, 
 
 static void setupFilters()
 {
-  // pulse filter
-  updateFilter(PULSE, BROADCAST_ID, BROADCAST_ID, 0, STF0M);
+  // setup pulse, consensus, and block filters with broadcast ID and set as enabled
+  for(MsgType i=PULSE; i<SHARE; i++)
+  {
+    updateFilter(i, BROADCAST_ID, BROADCAST_ID, 0, STF0M);
+  }
 
-  // consensus filter
-  updateFilter(CONSENSUS, BROADCAST_ID, BROADCAST_ID, 0, STF0M);
-
-  // set up all other filters to be initially disabled
+  // setup all other filters to be initially disabled
   for(MsgType i=SHARE; i<NUM_MSG_TYPES; i++)
   {
     updateFilter(i, BROADCAST_ID, myID, 0, DISABLE);
@@ -110,6 +110,8 @@ static void setupFilters()
 
 static void setupTxBufs()
 {
+  updateTxBuf(PULSE, BROADCAST_ID, BROADCAST_ID, 0, 1, &myID);
+
   for(MsgType i=0; i<NUM_MSG_TYPES; i++)
   {
     updateTxBuf(i, myID, BROADCAST_ID, 0, 0, NULL);
@@ -187,7 +189,7 @@ static void rxCallback(uint8_t len, uint32_t id)
   {
     if(header == CONSENSUS)
     {
-      gettingBlocks = true;
+      gettingConsensusBlocks = true;
       doingConsensus = false;
       uint8_t ackID = rxBuf[0];
       markActivePeer(ackID);
@@ -241,54 +243,49 @@ static void rxCallback(uint8_t len, uint32_t id)
   }
   else if(type == BLOCK)
   {
-    if(header == SHARE)
+    dbg_write_str("Receiving block from ");
+    dbg_write_u8(&senderID, 1);
+    dbg_write_char('\n');
+    // build block from received data
+    for(int i=0; i<len; i++)
     {
-      dbg_write_str("Receiving block from ");
-      dbg_write_u8(&senderID, 1);
-      dbg_write_char('\n');
-      // build block from received data
-      for(int i=0; i<len; i++)
+      partialBlock[partialBlockPos++] = rxBuf[i];
+      blockchainBytesPos++;
+    }
+
+    // check if a full block has been constructed
+    if(partialBlockPos == sizeof(Block))
+    {
+      // add block to chain if verification returns true
+      Block tempBlock = *((Block *)partialBlock);
+      if(verifyBlock(tempBlock))
       {
-        partialBlock[partialBlockPos++] = rxBuf[i];
-        blockchainBytesPos++;
-      }
-  
-      // check if a full block has been constructed
-      if(partialBlockPos == sizeof(Block))
-      {
-        // add block to chain if verification returns true
-        Block tempBlock = *((Block *)partialBlock);
-        if(verifyBlock(tempBlock))
-        {
-          blockchain[height++] = tempBlock;
-        }
-  
-        // reset partial block buffer
-        for(int i=0; i<sizeof(Block); i++)
-        {
-          partialBlock[i] = 0;
-        }
-        partialBlockPos = 0;
+        blockchain[height++] = tempBlock;
       }
 
-      // send block ack, with current blockchain byte position
-      updateTxBuf(ACK, myID, senderID, BLOCK, 4, (uint8_t *)&blockchainBytesPos);
-      CANSend(ACK);
+      // reset partial block buffer
+      for(int i=0; i<sizeof(Block); i++)
+      {
+        partialBlock[i] = 0;
+      }
+      partialBlockPos = 0;
     }
+
+    // send block ack, with current blockchain byte position
+    updateTxBuf(ACK, myID, senderID, BLOCK, 4, (uint8_t *)&blockchainBytesPos);
+    CANSend(ACK);
   }
   else if(type == SHARE)
   {
     // start sending first block in chain
-
-    // setup block buffer
     updateTxBuf(BLOCK, myID, senderID, SHARE, RX_FIFO_ELEMENT_DATA_BYTES, (uint8_t *)&blockchain);
     CANSend(BLOCK);
   }
   else if(type == END)
   {
-    dbg_write_str("Completed consensus\n");
+    dbg_write_str("Received all blocks\n");
 
-    gettingBlocks = false;
+    gettingConsensusBlocks = false;
     blockchainBytesPos = 0;
   }
 }
@@ -332,7 +329,7 @@ static void consensus()
   }
   
   // spin here while we receive blocks asynchronously and verify the chain, only finishing once we receive an end message
-  while(gettingBlocks);
+  while(gettingConsensusBlocks);
 
   // reset filters for normal operation
   setupFilters();

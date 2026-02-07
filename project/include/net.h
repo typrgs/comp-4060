@@ -11,8 +11,8 @@ typedef enum MSG_TYPE
 {
   PULSE,
   CONSENSUS,
-  SHARE,
   BLOCK,
+  SHARE,
   END,
   ACK,
   NUM_MSG_TYPES
