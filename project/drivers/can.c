@@ -99,10 +99,10 @@ void CANInit(uint32_t *rxFifo0Start, uint32_t *rxFifo1Start, uint32_t *txBufStar
 
 #ifndef NDEBUG
   // SET TEST MODE
-  CAN1_REGS->CAN_CCCR |= CAN_CCCR_TEST_Msk;
+  // CAN1_REGS->CAN_CCCR |= CAN_CCCR_TEST_Msk;
 
   // SET EXTERNAL LOOPBACK
-  CAN1_REGS->CAN_TEST = CAN_TEST_LBCK_Msk;
+  // CAN1_REGS->CAN_TEST = CAN_TEST_LBCK_Msk;
 #endif
 
   CAN1_REGS->CAN_CCCR &= ~CAN_CCCR_INIT_Msk;

@@ -24,7 +24,7 @@ static uint8_t rxBuf[RX_FIFO_ELEMENT_DATA_BYTES];
 #define PULSE_RATE 1000 // ms
 #define CONSENSUS_RATE 10000 // ms
 
-#define CONSENSUS_RESEND_TIMEOUT 100 // ms
+#define CONSENSUS_RESEND_TIMEOUT 1000 // ms
 
 // store a transmit buffer per message type
 static CANTxBuf txBufs[NUM_MSG_TYPES] = {0};
@@ -42,6 +42,7 @@ static uint16_t height = 0;
 
 // state variables
 static bool doingConsensus = false;
+static bool gettingBlocks = false;
 static uint8_t partialBlock[sizeof(Block)];
 static uint8_t partialBlockPos = 0;
 
@@ -64,40 +65,46 @@ static void readParams()
 static void updateTxBuf(MsgType type, uint8_t senderID, uint8_t receiverID, uint8_t header, uint8_t dataLength, uint8_t *data)
 {
   txBufs[type].bufIndex = type;
+  txBufs[type].id[ID_MSG_TYPE_Pos] = type;
   txBufs[type].id[ID_SENDER_Pos] = senderID;
   txBufs[type].id[ID_RECEIVER_Pos] = receiverID;
-  txBufs[type].id[ID_HEADER_Pos] |= header;
+  txBufs[type].id[ID_HEADER_Pos] = header;
   txBufs[type].dataLength = dataLength;
-  if(data != NULL && dataLength > 0)
+  if(data != NULL)
   {
-    *(uint64_t *)txBufs[type].data = *((uint64_t *)data);
+    for(int i=0; i<dataLength; i++)
+    {
+      txBufs[type].data[i] = data[i];
+    }
   }
+
   CANUpdateTxBuf(txBufs[type]);
 }
 
 static void updateFilter(MsgType msgType, uint8_t senderID, uint8_t receiverID, uint8_t header, FilterConfig config)
 {
   filters[msgType].filterIndex = msgType;
+  filters[msgType].firstID[ID_MSG_TYPE_Pos] = msgType;
   filters[msgType].firstID[ID_SENDER_Pos] = senderID;
   filters[msgType].firstID[ID_RECEIVER_Pos] = receiverID;
-  filters[msgType].firstID[ID_HEADER_Pos] |= header;
+  filters[msgType].firstID[ID_HEADER_Pos] = header;
   filters[msgType].config = config;
   filters[msgType].type = CLASSIC;
-  CANUpdateFilter((filters[msgType]));
+  CANUpdateFilter(filters[msgType]);
 }
 
 static void setupFilters()
 {
   // pulse filter
-  updateFilter(PULSE, PULSE, BROADCAST_ID, BROADCAST_ID, STF0M);
+  updateFilter(PULSE, BROADCAST_ID, BROADCAST_ID, 0, STF0M);
 
   // consensus filter
-  updateFilter(CONSENSUS, CONSENSUS, BROADCAST_ID, BROADCAST_ID, STF0M);
+  updateFilter(CONSENSUS, BROADCAST_ID, BROADCAST_ID, 0, STF0M);
 
   // set up all other filters to be initially disabled
   for(MsgType i=SHARE; i<NUM_MSG_TYPES; i++)
   {
-    updateFilter(i, i, myID, 0, DISABLE);
+    updateFilter(i, BROADCAST_ID, myID, 0, DISABLE);
   }
 }
 
@@ -117,7 +124,7 @@ static void markActivePeer(uint8_t peerID)
 
 static bool verifyBlock(Block toVerify)
 {
-  if(height == 0 && (toVerify.nonce != UINT8_MAX || toVerify.transaction.amt != 0 || toVerify.transaction.srcID != 0 || toVerify.transaction.destID != 0))
+  if(height == 0 && (toVerify.nonce != UINT32_MAX || toVerify.transaction.amt != 0 || toVerify.transaction.srcID != 0 || toVerify.transaction.destID != 0))
   {
     return false;
   }
@@ -180,8 +187,14 @@ static void rxCallback(uint8_t len, uint32_t id)
   {
     if(header == CONSENSUS)
     {
+      gettingBlocks = true;
+      doingConsensus = false;
       uint8_t ackID = rxBuf[0];
       markActivePeer(ackID);
+
+      dbg_write_str("Sharing with ");
+      dbg_write_u8(&ackID, 1);
+      dbg_write_char('\n');
 
       // once ack received, setup share tx buffer and filter, send share to begin receiving blocks
 
@@ -230,6 +243,9 @@ static void rxCallback(uint8_t len, uint32_t id)
   {
     if(header == SHARE)
     {
+      dbg_write_str("Receiving block from ");
+      dbg_write_u8(&senderID, 1);
+      dbg_write_char('\n');
       // build block from received data
       for(int i=0; i<len; i++)
       {
@@ -270,7 +286,9 @@ static void rxCallback(uint8_t len, uint32_t id)
   }
   else if(type == END)
   {
-    doingConsensus = false;
+    dbg_write_str("Completed consensus\n");
+
+    gettingBlocks = false;
     blockchainBytesPos = 0;
   }
 }
@@ -301,18 +319,20 @@ static void consensus()
   // setup consensus buffer
   updateTxBuf(CONSENSUS, BROADCAST_ID, BROADCAST_ID, 0, 1, (uint8_t *)&myID);
 
+  doingConsensus = true;
+
   // broadcast consensus request until we get a response
-  while(!doingConsensus)
+  while(doingConsensus)
   {
     CANSend(CONSENSUS);
     
     // delay for a bit before re-broadcasting the consensus request
     uint32_t now = elapsedMS();
-    while(!doingConsensus && (elapsedMS() - now < CONSENSUS_RESEND_TIMEOUT));
+    while(doingConsensus && (elapsedMS() - now < CONSENSUS_RESEND_TIMEOUT));
   }
-
+  
   // spin here while we receive blocks asynchronously and verify the chain, only finishing once we receive an end message
-  while(doingConsensus);
+  while(gettingBlocks);
 
   // reset filters for normal operation
   setupFilters();
@@ -358,7 +378,7 @@ int main()
 
   // enable interrupts
   __enable_irq();
-  
+
   startup();
 
   // timestamps for event scheduling
@@ -381,11 +401,11 @@ int main()
       consensus();
       consensusTimestamp = msCount + CONSENSUS_RATE;
     }
-    // if(msCount >= peerCheckTimestamp)
-    // {
-    //   peerCheck(msCount);
-    //   peerCheckTimestamp = msCount + (PULSE_RATE * 2);
-    // }
+    if(msCount >= peerCheckTimestamp)
+    {
+      peerCheck(msCount);
+      peerCheckTimestamp = msCount + (PULSE_RATE * 2);
+    }
     if(msCount >= flashTimestamp)
     {
       PORT_REGS->GROUP[0].PORT_OUTTGL = PORT_PA14;
