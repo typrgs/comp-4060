@@ -9,7 +9,7 @@
 #define RX_FIFO_ELEMENT_WORDS 4 // 32-bit words
 #define TX_BUF_ELEMENT_WORDS 4 // 32-bit words
 
-#define RX_FIFO_ELEMENT_DATA_BYTES 8 // bytes
+#define CAN_MESSAGE_SIZE 8 // bytes
 
 typedef enum FILTER_CONFIG
 {
@@ -33,7 +33,7 @@ typedef struct CAN_TX_BUF
   uint8_t bufIndex;
   uint8_t id[4];
   uint8_t dataLength;
-  uint8_t data[8];
+  uint8_t data[CAN_MESSAGE_SIZE];
 } CANTxBuf;
 
 typedef struct CAN_EXT_FILTER

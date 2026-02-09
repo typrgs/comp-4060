@@ -18,7 +18,7 @@ static uint32_t messageRAM[EXTENDED_FILTER_SIZE + RX_FIFO_SIZE + TX_BUF_SIZE] __
 static uint32_t *extendedFilterStart = (uint32_t *)&(messageRAM[0]);
 static uint32_t *rxFifoStart = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE]);
 static uint32_t *txBufStart = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE + RX_FIFO_SIZE]);
-static uint8_t rxBuf[RX_FIFO_ELEMENT_DATA_BYTES];
+static uint8_t rxBuf[CAN_MESSAGE_SIZE];
 
 #define BLINK_RATE 500 // ms
 #define PULSE_RATE 1000 // ms
@@ -224,7 +224,7 @@ static void rxCallback(uint8_t len, uint32_t id)
         uint32_t oldBytesPos = currBytePos;
   
         // manually place block data into tx buffer data region
-        for(int i=0; i<RX_FIFO_ELEMENT_DATA_BYTES && currBytePos < sizeof(Block) * height; i++)
+        for(int i=0; i<CAN_MESSAGE_SIZE && currBytePos < sizeof(Block) * height; i++)
         {
           txBufs[BLOCK].data[i] = blockchainBytesPtr[currBytePos++];
         }
@@ -278,7 +278,7 @@ static void rxCallback(uint8_t len, uint32_t id)
   else if(type == SHARE)
   {
     // start sending first block in chain
-    updateTxBuf(BLOCK, myID, senderID, SHARE, RX_FIFO_ELEMENT_DATA_BYTES, (uint8_t *)&blockchain);
+    updateTxBuf(BLOCK, myID, senderID, SHARE, CAN_MESSAGE_SIZE, (uint8_t *)&blockchain);
     CANSend(BLOCK);
   }
   else if(type == END)

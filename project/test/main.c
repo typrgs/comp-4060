@@ -17,7 +17,7 @@ uint32_t *extendedFilterStart = (uint32_t *)&(messageRAM[0]);
 uint32_t *rxFifoStart = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE]);
 uint32_t *txBufStart = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE + RX_FIFO_SIZE]);
 
-uint8_t rxBuf[RX_FIFO_ELEMENT_DATA_BYTES];
+uint8_t rxBuf[CAN_MESSAGE_SIZE];
 
 
 void processMsg(uint8_t len)

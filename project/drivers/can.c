@@ -160,7 +160,7 @@ void CAN1_Handler()
     uint8_t *dataPointer = (uint8_t *)(&wordPointer[2]);
     
     // wipe data from last receive to avoid data leakage
-    for(int i=0; i<RX_FIFO_ELEMENT_DATA_BYTES; i++)
+    for(int i=0; i<CAN_MESSAGE_SIZE; i++)
     {
       rxBytes[i] = 0;
     }
