@@ -162,7 +162,7 @@ static void rxCallback(uint8_t len, uint32_t id)
   if(type == PULSE)
   {
     dbg_write_str("Pulse from: ");
-    dbg_write_u8(&senderID, 1);
+    dbg_write_u8(rxBuf, 1);
     dbg_write_char('\n');
 
     // mark peer as active
