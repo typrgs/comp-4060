@@ -177,137 +177,144 @@ static bool sendBlockMessage(uint16_t heightConsidered, uint8_t *blockBytesPtr, 
   return result;
 }
 
+static void rxPulse(MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
+{
+  dbg_write_str("Pulse from: ");
+  dbg_write_u8(rxBuf, 1);
+  dbg_write_char('\n');
+
+  // mark peer as active
+  markActivePeer(rxBuf[0]);
+}
+
+static void rxConsensus(MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
+{
+  if(header == ACK && (doingConsensus || waitingForConsensus))
+  {
+    // we've completed the consensus handshake, and now it is time to begin sharing our blockchain
+    if(senderID == BROADCAST_ID && receiverID == myID)
+    {
+      dbg_write_str("Consensus handshake completed\n");
+
+      doingConsensus = true;
+      waitingForConsensus = false;
+      
+      // setup filter to only accept consensus blocks from partner
+      uint8_t partnerID = rxBuf[0];
+      updateFilter(BLOCK, partnerID, myID, SHARE, STF0M);
+      
+      // send request for first block
+      blockBytesPos = 0;
+      updateTxBuf(CONSENSUS, myID, partnerID, ACK, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
+      CANSend(CONSENSUS);
+    }
+    // we are continuining to share our blockchain
+    else if(senderID != BROADCAST_ID && receiverID == myID)
+    {
+      dbg_write_str("Beginning to send blocks\n");
+
+      // send blocks, starting from the point they send us
+      uint8_t currBytePos = rxBuf[0];
+      
+      // if we sent an end message instead, reset the consensus filter to receive future requests
+      if(!sendBlockMessage(height, (uint8_t *)&blockchain, currBytePos, senderID, myID, SHARE))
+      {
+        doingConsensus = false;
+        updateFilter(CONSENSUS, BROADCAST_ID, BROADCAST_ID, NONE, STF0M);  
+      }
+    }
+  }
+  // we have received a consensus request from someone on the network
+  else
+  {
+    uint8_t consensusReqID = rxBuf[0];
+    markActivePeer(consensusReqID);
+
+    doingConsensus = true;
+
+    dbg_write_str("Sharing blocks with ");
+    dbg_write_u8(&consensusReqID, 1);
+    dbg_write_char('\n');
+  
+    // update consensus filter with partner ID to reject all other consensus requests
+    updateFilter(CONSENSUS, consensusReqID, myID, ACK, STF0M);
+    
+    // setup consensus buffer to send confirmation to src peer
+    updateTxBuf(CONSENSUS, BROADCAST_ID, consensusReqID, ACK, 1, &myID);
+    CANSend(CONSENSUS);
+  }
+}
+
+static void rxBlock(MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
+{
+  dbg_write_str("Receiving block from ");
+  dbg_write_u8(&senderID, 1);
+  dbg_write_char('\n');
+
+  if(senderID == BROADCAST_ID && receiverID == BROADCAST_ID && header == NEW)
+  {
+    receivingNewBlock = true;
+  }
+
+  // build block from received data
+  for(int i=0; i<len; i++)
+  {
+    partialBlock[partialBlockPos++] = rxBuf[i];
+    blockBytesPos++;
+  }
+
+  // check if a full block has been constructed
+  if(partialBlockPos == sizeof(Block))
+  {
+    // add block to chain if verification returns true
+    Block tempBlock = *((Block *)partialBlock);
+    if(verifyBlock(tempBlock))
+    {
+      blockchain[height++] = tempBlock;
+    }
+
+    // reset partial block buffer
+    for(int i=0; i<sizeof(Block); i++)
+    {
+      partialBlock[i] = 0;
+    }
+    partialBlockPos = 0;
+  }
+
+  if(header == SHARE)
+  {
+    updateTxBuf(CONSENSUS, myID, senderID, ACK, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
+    CANSend(CONSENSUS);
+  }
+}
+
+static void rxEnd(MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
+{
+  dbg_write_str("Received all blocks\n");
+
+  if(header == SHARE)
+  {
+    dbg_write_str("Consensus complete\n");
+    doingConsensus = false;
+  }
+  else if(header == NEW)
+  {
+    receivingNewBlock = false;
+  }
+  blockBytesPos = 0;
+}
+
 static void rxCallback(uint8_t len, uint32_t id)
 {
   uint8_t *idAsBytes = (uint8_t *)&id;
   MsgType type = idAsBytes[ID_MSG_TYPE_Pos];
   uint8_t senderID = idAsBytes[ID_SENDER_Pos];
   uint8_t receiverID = idAsBytes[ID_RECEIVER_Pos];
-  uint8_t header = idAsBytes[ID_HEADER_Pos] & 0x1F;
+  HeaderType header = idAsBytes[ID_HEADER_Pos] & 0x1F;
 
-  if(type == PULSE)
-  {
-    dbg_write_str("Pulse from: ");
-    dbg_write_u8(rxBuf, 1);
-    dbg_write_char('\n');
+  static void (*rxTypes[])(MsgType, uint8_t, uint8_t, HeaderType, uint8_t *, uint8_t) = {rxPulse, rxConsensus, rxBlock, rxEnd};
 
-    // mark peer as active
-    markActivePeer(rxBuf[0]);
-  }
-  else if(type == CONSENSUS)
-  {
-    if(header == ACK && (doingConsensus || waitingForConsensus))
-    {
-      // we've completed the consensus handshake, and now it is time to begin sharing our blockchain
-      if(senderID == BROADCAST_ID && receiverID == myID)
-      {
-        dbg_write_str("Consensus handshake completed\n");
-
-        doingConsensus = true;
-        waitingForConsensus = false;
-        
-        // setup filter to only accept consensus blocks from partner
-        uint8_t partnerID = rxBuf[0];
-        updateFilter(BLOCK, partnerID, myID, SHARE, STF0M);
-        
-        // send request for first block
-        blockBytesPos = 0;
-        updateTxBuf(CONSENSUS, myID, partnerID, ACK, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
-        CANSend(CONSENSUS);
-      }
-      // we are continuining to share our blockchain
-      else if(senderID != BROADCAST_ID && receiverID == myID)
-      {
-        dbg_write_str("Beginning to send blocks\n");
-
-        // send blocks, starting from the point they send us
-        uint8_t currBytePos = rxBuf[0];
-        
-        // if we sent an end message instead, reset the consensus filter to receive future requests
-        if(!sendBlockMessage(height, (uint8_t *)&blockchain, currBytePos, senderID, myID, SHARE))
-        {
-          doingConsensus = false;
-          updateFilter(CONSENSUS, BROADCAST_ID, BROADCAST_ID, NONE, STF0M);  
-        }
-      }
-    }
-    // we have received a consensus request from someone on the network
-    else
-    {
-      uint8_t consensusReqID = rxBuf[0];
-      markActivePeer(consensusReqID);
-
-      doingConsensus = true;
-
-      dbg_write_str("Sharing blocks with ");
-      dbg_write_u8(&consensusReqID, 1);
-      dbg_write_char('\n');
-    
-      // update consensus filter with partner ID to reject all other consensus requests
-      updateFilter(CONSENSUS, consensusReqID, myID, ACK, STF0M);
-      
-      // setup consensus buffer to send confirmation to src peer
-      updateTxBuf(CONSENSUS, BROADCAST_ID, consensusReqID, ACK, 1, &myID);
-      CANSend(CONSENSUS);
-    }
-  }
-  else if(type == BLOCK)
-  {
-    dbg_write_str("Receiving block from ");
-    dbg_write_u8(&senderID, 1);
-    dbg_write_char('\n');
-
-    if(senderID == BROADCAST_ID && receiverID == BROADCAST_ID && header == NEW)
-    {
-      receivingNewBlock = true;
-    }
-
-    // build block from received data
-    for(int i=0; i<len; i++)
-    {
-      partialBlock[partialBlockPos++] = rxBuf[i];
-      blockBytesPos++;
-    }
-
-    // check if a full block has been constructed
-    if(partialBlockPos == sizeof(Block))
-    {
-      // add block to chain if verification returns true
-      Block tempBlock = *((Block *)partialBlock);
-      if(verifyBlock(tempBlock))
-      {
-        blockchain[height++] = tempBlock;
-      }
-
-      // reset partial block buffer
-      for(int i=0; i<sizeof(Block); i++)
-      {
-        partialBlock[i] = 0;
-      }
-      partialBlockPos = 0;
-    }
-
-    if(header == SHARE)
-    {
-      updateTxBuf(CONSENSUS, myID, senderID, ACK, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
-      CANSend(CONSENSUS);
-    }
-  }
-  else if(type == END)
-  {
-    dbg_write_str("Received all blocks\n");
-
-    if(header == SHARE)
-    {
-      dbg_write_str("Consensus complete\n");
-      doingConsensus = false;
-    }
-    else if(header == NEW)
-    {
-      receivingNewBlock = false;
-    }
-    blockBytesPos = 0;
-  }
+  rxTypes[type](type, senderID, receiverID, header, rxBuf, len);
 }
 
 static void peerCheck(uint32_t timeNow)
