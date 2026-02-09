@@ -41,12 +41,14 @@ static Block blockchain[UINT8_MAX * 2] = {0};
 static uint16_t height = 0;
 
 // state variables
+static bool waitingForConsensus = false;
 static bool doingConsensus = false;
-static bool gettingConsensusBlocks = false;
 static uint8_t partialBlock[sizeof(Block)];
 static uint8_t partialBlockPos = 0;
 
-static uint32_t blockchainBytesPos = 0;
+static uint32_t blockBytesPos = 0;
+
+static bool receivingNewBlock = false;
 
 
 static void readParams()
@@ -89,22 +91,16 @@ static void updateFilter(MsgType msgType, uint8_t senderID, uint8_t receiverID, 
   filters[msgType].id[ID_RECEIVER_Pos] = receiverID;
   filters[msgType].id[ID_HEADER_Pos] = header;
   filters[msgType].config = config;
-  filters[msgType].type = DUAL;
+  filters[msgType].type = CLASSIC;
   CANUpdateFilter(filters[msgType]);
 }
 
 static void setupFilters()
 {
   // setup pulse, consensus, and block filters with broadcast ID and set as enabled
-  for(MsgType i=PULSE; i<SHARE; i++)
+  for(MsgType i=PULSE; i<NUM_MSG_TYPES; i++)
   {
     updateFilter(i, BROADCAST_ID, BROADCAST_ID, 0, STF0M);
-  }
-
-  // setup all other filters to be initially disabled
-  for(MsgType i=SHARE; i<NUM_MSG_TYPES; i++)
-  {
-    updateFilter(i, BROADCAST_ID, myID, 0, DISABLE);
   }
 }
 
@@ -151,12 +147,42 @@ static bool verifyBlock(Block toVerify)
   return true;
 }
 
+static bool sendBlockMessage(uint16_t heightConsidered, uint8_t *blockBytesPtr, uint64_t currBytePos, uint8_t to, uint8_t from, HeaderType header)
+{
+  bool result = true;
+
+  // check if there are still bytes to be sent for the block(s) we are sending
+  if(currBytePos < sizeof(Block) * heightConsidered)
+  {
+    uint64_t oldBytesPos = currBytePos;
+
+    // check how many bytes are left until reaching the end of the set of blocks being sent
+    uint64_t bytesUntilEnd = (sizeof(Block) * heightConsidered) - currBytePos;
+
+    // advance the current byte position by the min of the bytes remaining and the max message size
+    currBytePos += (bytesUntilEnd >= CAN_MESSAGE_SIZE ? CAN_MESSAGE_SIZE : bytesUntilEnd);
+  
+    // update transmit buffer and send
+    updateTxBuf(BLOCK, from, to, header, currBytePos - oldBytesPos, &blockBytesPtr[oldBytesPos]);
+    CANSend(BLOCK);
+  }
+  // send end message if there are no more bytes to send
+  else
+  {
+    result = false;
+    updateTxBuf(END, from, to, header, 0, NULL);
+    CANSend(END);
+  }
+
+  return result;
+}
 
 static void rxCallback(uint8_t len, uint32_t id)
 {
   uint8_t *idAsBytes = (uint8_t *)&id;
   MsgType type = idAsBytes[ID_MSG_TYPE_Pos];
   uint8_t senderID = idAsBytes[ID_SENDER_Pos];
+  uint8_t receiverID = idAsBytes[ID_RECEIVER_Pos];
   uint8_t header = idAsBytes[ID_HEADER_Pos] & 0x1F;
 
   if(type == PULSE)
@@ -170,75 +196,59 @@ static void rxCallback(uint8_t len, uint32_t id)
   }
   else if(type == CONSENSUS)
   {
-    uint8_t consensusReqID = rxBuf[0];
-
-    markActivePeer(consensusReqID);
-
-    dbg_write_str("Sharing blocks with ");
-    dbg_write_u8(&consensusReqID, 1);
-    dbg_write_char('\n');
-
-    // setup share filter
-    updateFilter(SHARE, consensusReqID, myID, 0, STF0M);
-    
-    // setup ack buffer to send to src peer
-    updateTxBuf(ACK, BROADCAST_ID, consensusReqID, CONSENSUS, 1, &myID);
-    CANSend(ACK);
-  }
-  else if(type == ACK)
-  {
-    if(header == CONSENSUS)
+    if(header == ACK && (doingConsensus || waitingForConsensus))
     {
-      gettingConsensusBlocks = true;
-      doingConsensus = false;
-      uint8_t ackID = rxBuf[0];
-      markActivePeer(ackID);
-
-      dbg_write_str("Sharing with ");
-      dbg_write_u8(&ackID, 1);
-      dbg_write_char('\n');
-
-      // once ack received, setup share tx buffer and filter, send share to begin receiving blocks
-
-      // disable ack filter
-      filters[ACK].config = DISABLE;
-      CANUpdateFilter(filters[ACK]);
-
-      // setup share buffer
-      updateTxBuf(SHARE, myID, ackID, 0, 1, &myID);
-
-      // setup block filter
-      updateFilter(BLOCK, ackID, myID, SHARE, STF0M);
-
-      // send share request
-      CANSend(SHARE);
-    }
-    else if(header == BLOCK)
-    {
-      // on block ack, send next block portion if there is more to send
-      uint32_t currBytePos = ((uint32_t *)rxBuf)[0];
-
-      if(currBytePos < sizeof(Block) * height)
+      // we've completed the consensus handshake, and now it is time to begin sharing our blockchain
+      if(senderID == BROADCAST_ID && receiverID == myID)
       {
-        uint8_t *blockchainBytesPtr = (uint8_t *)&blockchain;
-        uint32_t oldBytesPos = currBytePos;
-  
-        // manually place block data into tx buffer data region
-        for(int i=0; i<CAN_MESSAGE_SIZE && currBytePos < sizeof(Block) * height; i++)
+        dbg_write_str("Consensus handshake completed\n");
+
+        doingConsensus = true;
+        waitingForConsensus = false;
+        
+        // setup filter to only accept consensus blocks from partner
+        uint8_t partnerID = rxBuf[0];
+        updateFilter(BLOCK, partnerID, myID, SHARE, STF0M);
+        
+        // send request for first block
+        blockBytesPos = 0;
+        updateTxBuf(CONSENSUS, myID, partnerID, ACK, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
+        CANSend(CONSENSUS);
+      }
+      // we are continuining to share our blockchain
+      else if(senderID != BROADCAST_ID && receiverID == myID)
+      {
+        dbg_write_str("Beginning to send blocks\n");
+
+        // send blocks, starting from the point they send us
+        uint8_t currBytePos = rxBuf[0];
+        
+        // if we sent an end message instead, reset the consensus filter to receive future requests
+        if(!sendBlockMessage(height, (uint8_t *)&blockchain, currBytePos, senderID, myID, SHARE))
         {
-          txBufs[BLOCK].data[i] = blockchainBytesPtr[currBytePos++];
+          doingConsensus = false;
+          updateFilter(CONSENSUS, BROADCAST_ID, BROADCAST_ID, NONE, STF0M);  
         }
+      }
+    }
+    // we have received a consensus request from someone on the network
+    else
+    {
+      uint8_t consensusReqID = rxBuf[0];
+      markActivePeer(consensusReqID);
 
-        // use helper to update other tx buf properties
-        updateTxBuf(BLOCK, myID, senderID, SHARE, currBytePos - oldBytesPos, NULL);
-        CANSend(BLOCK);
-      }
-      else
-      {
-        // if entire blockchain already sent, send end response
-        updateTxBuf(END, myID, senderID, CONSENSUS, 0, NULL);
-        CANSend(END);
-      }
+      doingConsensus = true;
+
+      dbg_write_str("Sharing blocks with ");
+      dbg_write_u8(&consensusReqID, 1);
+      dbg_write_char('\n');
+    
+      // update consensus filter with partner ID to reject all other consensus requests
+      updateFilter(CONSENSUS, consensusReqID, myID, ACK, STF0M);
+      
+      // setup consensus buffer to send confirmation to src peer
+      updateTxBuf(CONSENSUS, BROADCAST_ID, consensusReqID, ACK, 1, &myID);
+      CANSend(CONSENSUS);
     }
   }
   else if(type == BLOCK)
@@ -246,11 +256,17 @@ static void rxCallback(uint8_t len, uint32_t id)
     dbg_write_str("Receiving block from ");
     dbg_write_u8(&senderID, 1);
     dbg_write_char('\n');
+
+    if(senderID == BROADCAST_ID && receiverID == BROADCAST_ID && header == NEW)
+    {
+      receivingNewBlock = true;
+    }
+
     // build block from received data
     for(int i=0; i<len; i++)
     {
       partialBlock[partialBlockPos++] = rxBuf[i];
-      blockchainBytesPos++;
+      blockBytesPos++;
     }
 
     // check if a full block has been constructed
@@ -271,22 +287,26 @@ static void rxCallback(uint8_t len, uint32_t id)
       partialBlockPos = 0;
     }
 
-    // send block ack, with current blockchain byte position
-    updateTxBuf(ACK, myID, senderID, BLOCK, 4, (uint8_t *)&blockchainBytesPos);
-    CANSend(ACK);
-  }
-  else if(type == SHARE)
-  {
-    // start sending first block in chain
-    updateTxBuf(BLOCK, myID, senderID, SHARE, CAN_MESSAGE_SIZE, (uint8_t *)&blockchain);
-    CANSend(BLOCK);
+    if(header == SHARE)
+    {
+      updateTxBuf(CONSENSUS, myID, senderID, ACK, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
+      CANSend(CONSENSUS);
+    }
   }
   else if(type == END)
   {
     dbg_write_str("Received all blocks\n");
 
-    gettingConsensusBlocks = false;
-    blockchainBytesPos = 0;
+    if(header == SHARE)
+    {
+      dbg_write_str("Consensus complete\n");
+      doingConsensus = false;
+    }
+    else if(header == NEW)
+    {
+      receivingNewBlock = false;
+    }
+    blockBytesPos = 0;
   }
 }
 
@@ -311,25 +331,25 @@ static void consensus()
   }
 
   // setup ack filter
-  updateFilter(ACK, BROADCAST_ID, myID, CONSENSUS, STF0M);
+  updateFilter(CONSENSUS, BROADCAST_ID, myID, ACK, STF0M);
 
   // setup consensus buffer
   updateTxBuf(CONSENSUS, BROADCAST_ID, BROADCAST_ID, 0, 1, (uint8_t *)&myID);
 
-  doingConsensus = true;
+  waitingForConsensus = true;
 
   // broadcast consensus request until we get a response
-  while(doingConsensus)
+  while(waitingForConsensus)
   {
     CANSend(CONSENSUS);
     
     // delay for a bit before re-broadcasting the consensus request
     uint32_t now = elapsedMS();
-    while(doingConsensus && (elapsedMS() - now < CONSENSUS_RESEND_TIMEOUT));
+    while(waitingForConsensus && (elapsedMS() - now < CONSENSUS_RESEND_TIMEOUT));
   }
   
   // spin here while we receive blocks asynchronously and verify the chain, only finishing once we receive an end message
-  while(gettingConsensusBlocks);
+  while(doingConsensus);
 
   // reset filters for normal operation
   setupFilters();

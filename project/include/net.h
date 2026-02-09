@@ -12,8 +12,15 @@ typedef enum MSG_TYPE
   PULSE,
   CONSENSUS,
   BLOCK,
-  SHARE,
   END,
-  ACK,
   NUM_MSG_TYPES
 } MsgType;
+
+typedef enum HEADER_TYPE
+{
+  NONE,
+  ACK,
+  SHARE,
+  NEW,
+  NUM_HEADER_TYPES
+} HeaderType;
