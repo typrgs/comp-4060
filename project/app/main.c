@@ -112,7 +112,7 @@ static void setupTxBufs()
 {
   updateTxBuf(PULSE, BROADCAST_ID, BROADCAST_ID, 0, 1, &myID);
 
-  for(MsgType i=0; i<NUM_MSG_TYPES; i++)
+  for(MsgType i=CONSENSUS; i<NUM_MSG_TYPES; i++)
   {
     updateTxBuf(i, myID, BROADCAST_ID, 0, 0, NULL);
   }
