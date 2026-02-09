@@ -84,12 +84,12 @@ static void updateTxBuf(MsgType type, uint8_t senderID, uint8_t receiverID, uint
 static void updateFilter(MsgType msgType, uint8_t senderID, uint8_t receiverID, uint8_t header, FilterConfig config)
 {
   filters[msgType].filterIndex = msgType;
-  filters[msgType].firstID[ID_MSG_TYPE_Pos] = msgType;
-  filters[msgType].firstID[ID_SENDER_Pos] = senderID;
-  filters[msgType].firstID[ID_RECEIVER_Pos] = receiverID;
-  filters[msgType].firstID[ID_HEADER_Pos] = header;
+  filters[msgType].id[ID_MSG_TYPE_Pos] = msgType;
+  filters[msgType].id[ID_SENDER_Pos] = senderID;
+  filters[msgType].id[ID_RECEIVER_Pos] = receiverID;
+  filters[msgType].id[ID_HEADER_Pos] = header;
   filters[msgType].config = config;
-  filters[msgType].type = CLASSIC;
+  filters[msgType].type = DUAL;
   CANUpdateFilter(filters[msgType]);
 }
 
