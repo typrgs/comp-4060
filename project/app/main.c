@@ -189,9 +189,29 @@ static void rxPulse(MsgType type, uint8_t senderID, uint8_t receiverID, HeaderTy
 
 static void rxConsensus(MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
 {
-  if(header == ACK && (doingConsensus || waitingForConsensus))
+  // we have received a consensus request from someone on the network
+  if(header == NONE && !doingConsensus)
   {
-    // we've completed the consensus handshake, and now it is time to begin sharing our blockchain
+    uint8_t consensusReqID = rxBuf[0];
+    markActivePeer(consensusReqID);
+
+    // set this flag to temporarily prevent acceptance of other consensus requests
+    doingConsensus = true;
+
+    dbg_write_str("Sharing blocks with ");
+    dbg_write_u8(&consensusReqID, 1);
+    dbg_write_char('\n');
+  
+    // update consensus filter with partner ID to reject all other consensus requests
+    updateFilter(CONSENSUS, consensusReqID, myID, ACK, STF0M);
+    
+    // setup consensus buffer to send confirmation to src peer
+    updateTxBuf(CONSENSUS, BROADCAST_ID, consensusReqID, ACK, 1, &myID);
+    CANSend(CONSENSUS);
+  }
+  else if(header == ACK && (doingConsensus || waitingForConsensus))
+  {
+    // we've completed the consensus handshake, and now it is time to request the blockchain
     if(senderID == BROADCAST_ID && receiverID == myID)
     {
       dbg_write_str("Consensus handshake completed\n");
@@ -208,7 +228,7 @@ static void rxConsensus(MsgType type, uint8_t senderID, uint8_t receiverID, Head
       updateTxBuf(CONSENSUS, myID, partnerID, ACK, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
       CANSend(CONSENSUS);
     }
-    // we are continuining to share our blockchain
+    // we are sharing our blockchain
     else if(senderID != BROADCAST_ID && receiverID == myID)
     {
       dbg_write_str("Beginning to send blocks\n");
@@ -223,25 +243,6 @@ static void rxConsensus(MsgType type, uint8_t senderID, uint8_t receiverID, Head
         updateFilter(CONSENSUS, BROADCAST_ID, BROADCAST_ID, NONE, STF0M);  
       }
     }
-  }
-  // we have received a consensus request from someone on the network
-  else
-  {
-    uint8_t consensusReqID = rxBuf[0];
-    markActivePeer(consensusReqID);
-
-    doingConsensus = true;
-
-    dbg_write_str("Sharing blocks with ");
-    dbg_write_u8(&consensusReqID, 1);
-    dbg_write_char('\n');
-  
-    // update consensus filter with partner ID to reject all other consensus requests
-    updateFilter(CONSENSUS, consensusReqID, myID, ACK, STF0M);
-    
-    // setup consensus buffer to send confirmation to src peer
-    updateTxBuf(CONSENSUS, BROADCAST_ID, consensusReqID, ACK, 1, &myID);
-    CANSend(CONSENSUS);
   }
 }
 
