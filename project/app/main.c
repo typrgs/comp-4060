@@ -3,6 +3,7 @@
 #include "icm.h"
 #include "net.h"
 #include "blockchain.h"
+#include "trng.h"
 
 #define EXTENDED_FILTER_COUNT NUM_MSG_TYPES
 #define RX_FIFO_ELEMENT_COUNT 10
@@ -369,6 +370,7 @@ static void startup()
   icmInit();
   CANInit(rxFifoStart, NULL, txBufStart, extendedFilterStart, RX_FIFO_ELEMENT_COUNT, 0, TX_BUF_ELEMENT_COUNT, EXTENDED_FILTER_COUNT, rxBuf, rxCallback);
   heartInit();
+  trngInit();
 
   // setup filters
   setupFilters();
@@ -409,7 +411,7 @@ int main()
   // timestamps for event scheduling
   uint32_t flashTimestamp = 0;
   uint32_t pulseTimestamp = 0;
-  uint32_t consensusTimestamp = CONSENSUS_RATE;
+  uint32_t consensusTimestamp = CONSENSUS_RATE + trngRandom(1001) + 1000;
   uint32_t peerCheckTimestamp = PULSE_RATE * 2;
 
   for(;;)
@@ -424,7 +426,7 @@ int main()
     if(msCount >= consensusTimestamp)
     {
       consensus();
-      consensusTimestamp = msCount + CONSENSUS_RATE;
+      consensusTimestamp = msCount + CONSENSUS_RATE + trngRandom(1001) + 1000;
     }
     if(msCount >= peerCheckTimestamp)
     {
