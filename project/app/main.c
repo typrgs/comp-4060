@@ -23,8 +23,10 @@ static uint8_t rxBuf[CAN_MESSAGE_SIZE];
 
 #define BLINK_RATE 500 // ms
 #define PULSE_RATE 1000 // ms
+#define PEER_CHECK_RATE 4000 // ms
 #define CONSENSUS_RATE 10000 // ms
 
+#define DISCOVERY_TIMEOUT 1000 // ms
 #define CONSENSUS_RESEND_TIMEOUT 1000 // ms
 
 // store a transmit buffer per message type
@@ -36,7 +38,7 @@ static CANExtFilter filters[NUM_MSG_TYPES] = {0};
 static bool startNode = false;
 
 static uint8_t myID;
-static uint32_t activePeers[UINT8_MAX] = {0};
+static bool activePeers[UINT8_MAX] = {0};
 
 static Block blockchain[UINT8_MAX * 2] = {0};
 static uint16_t height = 0;
@@ -116,11 +118,6 @@ static void setupTxBufs()
 }
 
 
-static void markActivePeer(uint8_t peerID)
-{
-  activePeers[peerID] = elapsedMS();
-}
-
 static bool verifyBlock(Block toVerify)
 {
   if(height == 0 && (toVerify.nonce != UINT32_MAX || toVerify.transaction.amt != 0 || toVerify.transaction.srcID != 0 || toVerify.transaction.destID != 0))
@@ -185,7 +182,19 @@ static void rxPulse(MsgType type, uint8_t senderID, uint8_t receiverID, HeaderTy
   dbg_write_char('\n');
 
   // mark peer as active
-  markActivePeer(rxBuf[0]);
+  activePeers[rxBuf[0]] = true;
+}
+
+static void rxDiscover(MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
+{
+  activePeers[rxBuf[0]] = true;
+
+  // a new peer has joined and wants to know who is on the network
+  if(header == SHARE)
+  {
+    updateTxBuf(DISCOVER, BROADCAST_ID, rxBuf[0], NONE, 1, &myID);
+    CANSend(DISCOVER);
+  }
 }
 
 static void rxConsensus(MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
@@ -194,7 +203,7 @@ static void rxConsensus(MsgType type, uint8_t senderID, uint8_t receiverID, Head
   if(header == NONE && !doingConsensus)
   {
     uint8_t consensusReqID = rxBuf[0];
-    markActivePeer(consensusReqID);
+    activePeers[consensusReqID] = true;
 
     // set this flag to temporarily prevent acceptance of other consensus requests
     doingConsensus = true;
@@ -314,21 +323,27 @@ static void rxCallback(uint8_t len, uint32_t id)
   uint8_t receiverID = idAsBytes[ID_RECEIVER_Pos];
   HeaderType header = idAsBytes[ID_HEADER_Pos] & 0x1F;
 
-  static void (*rxTypes[])(MsgType, uint8_t, uint8_t, HeaderType, uint8_t *, uint8_t) = {rxPulse, rxConsensus, rxBlock, rxEnd};
+  static void (*rxTypes[])(MsgType, uint8_t, uint8_t, HeaderType, uint8_t *, uint8_t) = {rxPulse, rxDiscover, rxConsensus, rxBlock, rxEnd};
 
   rxTypes[type](type, senderID, receiverID, header, rxBuf, len);
 }
 
-static void peerCheck(uint32_t timeNow)
+static void peerCheck()
 {
+  // reset active peers
   for(int i=0; i<UINT8_MAX; i++)
   {
-    // check if the peer has been recently active, and if they have sent a pulse within 2 pulse periods
-    if(activePeers[i] && (timeNow - activePeers[i] > (PULSE_RATE * 2)))
-    {
-      activePeers[i] = 0;
-    }
+    activePeers[i] = 0;
   }
+
+  // send discover request
+  updateTxBuf(DISCOVER, BROADCAST_ID, BROADCAST_ID, SHARE, 1, &myID);
+  updateFilter(DISCOVER, BROADCAST_ID, myID, ACK, STF0M);
+  CANSend(DISCOVER);
+
+  // wait a bit to receive discovery responses
+  uint32_t now = elapsedMS();
+  while(elapsedMS() - now < DISCOVERY_TIMEOUT);
 }
 
 static void consensus()
@@ -382,6 +397,11 @@ static void startup()
   PORT_REGS->GROUP[0].PORT_DIRSET = PORT_PA14;
   PORT_REGS->GROUP[0].PORT_OUTSET = PORT_PA14;
 
+  // discover who is on the network
+  peerCheck();
+
+  updateFilter(DISCOVER, BROADCAST_ID, BROADCAST_ID, SHARE, STF0M);
+
   // start node initializes blockchain on startup, all others do consensus on startup
   if(startNode)
   {
@@ -412,7 +432,7 @@ int main()
   uint32_t flashTimestamp = 0;
   uint32_t pulseTimestamp = 0;
   uint32_t consensusTimestamp = CONSENSUS_RATE + trngRandom(1001) + 1000;
-  uint32_t peerCheckTimestamp = PULSE_RATE * 2;
+  uint32_t peerCheckTimestamp = PEER_CHECK_RATE;
 
   for(;;)
   {
@@ -431,7 +451,7 @@ int main()
     if(msCount >= peerCheckTimestamp)
     {
       peerCheck(msCount);
-      peerCheckTimestamp = msCount + (PULSE_RATE * 2);
+      peerCheckTimestamp = msCount + PEER_CHECK_RATE;
     }
     if(msCount >= flashTimestamp)
     {

@@ -10,6 +10,7 @@
 typedef enum MSG_TYPE
 {
   PULSE,
+  DISCOVER,
   CONSENSUS,
   BLOCK,
   END,
