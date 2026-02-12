@@ -49,7 +49,7 @@ static bool doingConsensus = false;
 static uint8_t partialBlock[sizeof(Block)];
 static uint8_t partialBlockPos = 0;
 
-static uint32_t blockBytesPos = 0;
+static uint64_t blockBytesPos = 0;
 
 static bool receivingNewBlock = false;
 
@@ -100,11 +100,11 @@ static void updateFilter(MsgType msgType, uint8_t senderID, uint8_t receiverID, 
 
 static void setupFilters()
 {
-  // setup pulse, consensus, and block filters with broadcast ID and set as enabled
-  for(MsgType i=PULSE; i<NUM_MSG_TYPES; i++)
-  {
-    updateFilter(i, BROADCAST_ID, BROADCAST_ID, 0, STF0M);
-  }
+  updateFilter(PULSE, BROADCAST_ID, BROADCAST_ID, NONE, STF0M);
+  updateFilter(DISCOVER, BROADCAST_ID, BROADCAST_ID, SHARE, STF0M);
+  updateFilter(CONSENSUS, BROADCAST_ID, BROADCAST_ID, NONE, STF0M);
+  updateFilter(BLOCK, BROADCAST_ID, BROADCAST_ID, NONE, STF0M);
+  updateFilter(END, BROADCAST_ID, BROADCAST_ID, NONE, STF0M);
 }
 
 static void setupTxBufs()
@@ -219,7 +219,7 @@ static void rxConsensus(MsgType type, uint8_t senderID, uint8_t receiverID, Head
     updateTxBuf(CONSENSUS, BROADCAST_ID, consensusReqID, ACK, 1, &myID);
     CANSend(CONSENSUS);
   }
-  else if(header == ACK && (doingConsensus || waitingForConsensus))
+  else if(header == ACK && waitingForConsensus)
   {
     // we've completed the consensus handshake, and now it is time to request the blockchain
     if(senderID == BROADCAST_ID && receiverID == myID)
@@ -241,10 +241,12 @@ static void rxConsensus(MsgType type, uint8_t senderID, uint8_t receiverID, Head
     // we are sharing our blockchain
     else if(senderID != BROADCAST_ID && receiverID == myID)
     {
-      dbg_write_str("Beginning to send blocks\n");
+      dbg_write_str("Consensus block ack received from ");
+      dbg_write_u8(&senderID, 1);
+      dbg_write_char('\n');
 
       // send blocks, starting from the point they send us
-      uint8_t currBytePos = rxBuf[0];
+      uint64_t currBytePos = *(uint64_t *)rxBuf;
       
       // if we sent an end message instead, reset the consensus filter to receive future requests
       if(!sendBlockMessage(height, (uint8_t *)&blockchain, currBytePos, senderID, myID, SHARE))
@@ -354,7 +356,7 @@ static void consensus()
   updateFilter(CONSENSUS, BROADCAST_ID, myID, ACK, STF0M);
 
   // setup consensus buffer
-  updateTxBuf(CONSENSUS, BROADCAST_ID, BROADCAST_ID, 0, 1, (uint8_t *)&myID);
+  updateTxBuf(CONSENSUS, BROADCAST_ID, BROADCAST_ID, NONE, 1, (uint8_t *)&myID);
 
   waitingForConsensus = true;
 
@@ -362,6 +364,7 @@ static void consensus()
   while(waitingForConsensus)
   {
     CANSend(CONSENSUS);
+    dbg_write_char('c');
     
     // delay for a bit before re-broadcasting the consensus request
     uint32_t now = elapsedMS();
@@ -413,6 +416,7 @@ static void startup()
   }
   else
   {
+    dbg_write_str("Doing initial consensus\n");
     consensus();
   }
 }
@@ -427,6 +431,8 @@ int main()
   __enable_irq();
 
   startup();
+  dbg_write_u32(&blockchain[0].nonce, 1);
+  dbg_write_u16(&height, 1);
 
   // timestamps for event scheduling
   uint32_t flashTimestamp = 0;
@@ -443,16 +449,16 @@ int main()
       CANSend(PULSE);
       pulseTimestamp = msCount + PULSE_RATE;
     }
-    if(msCount >= consensusTimestamp)
-    {
-      consensus();
-      consensusTimestamp = msCount + CONSENSUS_RATE + trngRandom(1001) + 1000;
-    }
-    if(msCount >= peerCheckTimestamp)
-    {
-      peerCheck(msCount);
-      peerCheckTimestamp = msCount + PEER_CHECK_RATE;
-    }
+    // if(msCount >= consensusTimestamp)
+    // {
+    //   consensus();
+    //   consensusTimestamp = msCount + CONSENSUS_RATE + trngRandom(1001) + 1000;
+    // }
+    // if(msCount >= peerCheckTimestamp)
+    // {
+    //   peerCheck(msCount);
+    //   peerCheckTimestamp = msCount + PEER_CHECK_RATE;
+    // }
     if(msCount >= flashTimestamp)
     {
       PORT_REGS->GROUP[0].PORT_OUTTGL = PORT_PA14;
