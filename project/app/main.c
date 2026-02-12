@@ -1,3 +1,4 @@
+#include "app_util.h"
 #include "heart.h"
 #include "can.h"
 #include "icm.h"
@@ -67,36 +68,7 @@ static void readParams()
   }
 }
 
-static void updateTxBuf(MsgType type, uint8_t senderID, uint8_t receiverID, uint8_t header, uint8_t dataLength, uint8_t *data)
-{
-  txBufs[type].bufIndex = type;
-  txBufs[type].id[ID_MSG_TYPE_Pos] = type;
-  txBufs[type].id[ID_SENDER_Pos] = senderID;
-  txBufs[type].id[ID_RECEIVER_Pos] = receiverID;
-  txBufs[type].id[ID_HEADER_Pos] = header;
-  txBufs[type].dataLength = dataLength;
-  if(data != NULL)
-  {
-    for(int i=0; i<dataLength; i++)
-    {
-      txBufs[type].data[i] = data[i];
-    }
-  }
 
-  CANUpdateTxBuf(txBufs[type]);
-}
-
-static void updateFilter(MsgType msgType, uint8_t senderID, uint8_t receiverID, uint8_t header, FilterConfig config)
-{
-  filters[msgType].filterIndex = msgType;
-  filters[msgType].id[ID_MSG_TYPE_Pos] = msgType;
-  filters[msgType].id[ID_SENDER_Pos] = senderID;
-  filters[msgType].id[ID_RECEIVER_Pos] = receiverID;
-  filters[msgType].id[ID_HEADER_Pos] = header;
-  filters[msgType].config = config;
-  filters[msgType].type = CLASSIC;
-  CANUpdateFilter(filters[msgType]);
-}
 
 static void setupFilters()
 {
@@ -116,7 +88,6 @@ static void setupTxBufs()
     updateTxBuf(i, myID, BROADCAST_ID, 0, 0, NULL);
   }
 }
-
 
 static bool verifyBlock(Block toVerify)
 {
@@ -202,41 +173,14 @@ static void rxConsensus(MsgType type, uint8_t senderID, uint8_t receiverID, Head
   // we have received a consensus request from someone on the network
   if(header == NONE && !doingConsensus)
   {
-    uint8_t consensusReqID = rxBuf[0];
-    activePeers[consensusReqID] = true;
 
-    // set this flag to temporarily prevent acceptance of other consensus requests
-    doingConsensus = true;
-
-    dbg_write_str("Sharing blocks with ");
-    dbg_write_u8(&consensusReqID, 1);
-    dbg_write_char('\n');
-  
-    // update consensus filter with partner ID to reject all other consensus requests
-    updateFilter(CONSENSUS, consensusReqID, myID, ACK, STF0M);
-    
-    // setup consensus buffer to send confirmation to src peer
-    updateTxBuf(CONSENSUS, BROADCAST_ID, consensusReqID, ACK, 1, &myID);
-    CANSend(CONSENSUS);
   }
   else if(header == ACK && waitingForConsensus)
   {
     // we've completed the consensus handshake, and now it is time to request the blockchain
     if(senderID == BROADCAST_ID && receiverID == myID)
     {
-      dbg_write_str("Consensus handshake completed\n");
 
-      doingConsensus = true;
-      waitingForConsensus = false;
-      
-      // setup filter to only accept consensus blocks from partner
-      uint8_t partnerID = rxBuf[0];
-      updateFilter(BLOCK, partnerID, myID, SHARE, STF0M);
-      
-      // send request for first block
-      blockBytesPos = 0;
-      updateTxBuf(CONSENSUS, myID, partnerID, ACK, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
-      CANSend(CONSENSUS);
     }
     // we are sharing our blockchain
     else if(senderID != BROADCAST_ID && receiverID == myID)
