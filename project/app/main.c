@@ -23,10 +23,10 @@ static uint8_t rxBuf[CAN_MESSAGE_SIZE];
 
 #define BLINK_RATE 500 // ms
 #define PULSE_RATE 1000 // ms
-#define PEER_CHECK_RATE 4000 // ms
+#define PEER_CHECK_RATE 15000 // ms
 #define CONSENSUS_RATE 10000 // ms
 
-#define DISCOVERY_TIMEOUT 1000 // ms
+#define DISCOVERY_TIMEOUT 500 // ms
 #define CONSENSUS_RESEND_TIMEOUT 1000 // ms
 
 // store a transmit buffer per message type
@@ -340,10 +340,6 @@ static void peerCheck()
   updateTxBuf(DISCOVER, BROADCAST_ID, BROADCAST_ID, SHARE, 1, &myID);
   updateFilter(DISCOVER, BROADCAST_ID, myID, ACK, STF0M);
   CANSend(DISCOVER);
-
-  // wait a bit to receive discovery responses
-  uint32_t now = elapsedMS();
-  while(elapsedMS() - now < DISCOVERY_TIMEOUT);
 }
 
 static void consensus()
@@ -399,6 +395,10 @@ static void startup()
 
   // discover who is on the network
   peerCheck();
+
+  // wait a bit to receive discovery responses
+  uint32_t now = elapsedMS();
+  while(elapsedMS() - now < DISCOVERY_TIMEOUT);
 
   updateFilter(DISCOVER, BROADCAST_ID, BROADCAST_ID, SHARE, STF0M);
 
