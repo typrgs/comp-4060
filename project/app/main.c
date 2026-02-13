@@ -22,12 +22,11 @@ static uint32_t *txBufStart = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE + RX
 static uint8_t rxBuf[CAN_MESSAGE_SIZE];
 
 #define BLINK_RATE 500 // ms
-#define PULSE_RATE 1000 // ms
+#define PULSE_RATE 5000 // ms
 #define PEER_CHECK_RATE 15000 // ms
 #define CONSENSUS_RATE 10000 // ms
 
-#define DISCOVERY_TIMEOUT 500 // ms
-#define CONSENSUS_RESEND_TIMEOUT 1000 // ms
+#define DISCOVERY_TIMEOUT 1000 // ms
 
 // store a transmit buffer per message type
 static CANTxBuf txBufs[NUM_MSG_TYPES] = {0};
@@ -47,7 +46,7 @@ static uint16_t longestChainHeight = 0;
 
 static bool doingDiscovery = true;
 static bool discoverySuccess = false;
-static bool sharingChain = false;
+static uint8_t chainPartnerID = 0;
 static uint8_t partialBlock[sizeof(Block)];
 static uint8_t partialBlockPos = 0;
 
@@ -57,13 +56,6 @@ static bool receivingNewBlock = false;
 
 static void discover();
 
-
-static void delay(uint32_t ms)
-{
-  uint32_t now = elapsedMS();
-
-  while((elapsedMS() - now) < ms);
-}
 
 static void readParams()
 {
@@ -105,16 +97,18 @@ static void updateFilter(MsgType msgType, uint8_t senderID, uint8_t receiverID, 
   filters[msgType].id[ID_RECEIVER_Pos] = receiverID;
   filters[msgType].id[ID_HEADER_Pos] = header;
   filters[msgType].config = config;
-  filters[msgType].type = CLASSIC;
+  filters[msgType].type = DUAL;
   CANUpdateFilter(filters[msgType]);
 }
 
 static void resetFilters()
 {
-  for(MsgType i=PULSE; i<NUM_MSG_TYPES; i++)
+  for(uint8_t i=0; i<NUM_MSG_TYPES; i++)
   {
     updateFilter(i, BROADCAST_ID, BROADCAST_ID, NONE, STF0M);
   }
+
+  updateFilter(CHAIN, BROADCAST_ID, myID, NONE, STF0M);
 }
 
 static void resetTxBufs()
@@ -203,35 +197,32 @@ static void rxPulse(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
 
 static void rxDiscover(uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
 {
-  if(!sharingChain && !doingDiscovery)
+  // someone is joining the network and they want to find out the longest chain
+  if(!doingDiscovery && header == NONE)
   {
-    // someone is joining the network and they want to find out the longest chain
-    if(header == NONE)
+    dbg_write_str("Received discovery request\n");
+
+    // place ID and height into data buffer
+    uint8_t data[sizeof(height) + sizeof(myID)];
+    data[0] = myID;
+    data[1] = ((uint8_t *)&height)[0];
+    data[2] = ((uint8_t *)&height)[1];
+
+    updateFilter(CHAIN, BROADCAST_ID, myID, NONE, STF0M);
+    updateTxBuf(DISCOVER, BROADCAST_ID, rxBuf[0], SHARE, sizeof(data), data);
+    CANSend(DISCOVER);
+  }
+  else if(header == SHARE)
+  {
+    // extract data from buffer
+    uint8_t peer = rxBuf[0];
+    uint16_t receivedHeight = *(uint16_t *)(&rxBuf[1]);
+    
+    // save the received height if larger than the currently saved value
+    if(receivedHeight >= longestChainHeight)
     {
-      // place ID and height into data buffer
-      uint8_t data[sizeof(height) + sizeof(myID)];
-      data[0] = myID;
-      data[1] = ((uint8_t *)&height)[0];
-      data[2] = ((uint8_t *)&height)[1];
-  
-      updateTxBuf(DISCOVER, BROADCAST_ID, rxBuf[0], SHARE, sizeof(data), data);
-      CANSend(DISCOVER);
-  
-      // setup filter just in case they select us to share our chain
-      updateFilter(CHAIN, rxBuf[0], myID, NONE, STF0M);
-    }
-    else if(header == SHARE)
-    {
-      // extract data from buffer
-      uint8_t peer = rxBuf[0];
-      uint16_t receivedHeight = *(uint16_t *)(&rxBuf[1]);
-      
-      // save the received height if larger than the currently saved value
-      if(receivedHeight > longestChainHeight)
-      {
-        longestChainHeight = receivedHeight;
-        longestChainPeerID = peer;
-      }
+      longestChainHeight = receivedHeight;
+      longestChainPeerID = peer;
     }
   }
 }
@@ -239,10 +230,14 @@ static void rxDiscover(uint8_t senderID, uint8_t receiverID, HeaderType header, 
 static void rxChain(uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
 {
   // receive NONE, respond ACK
-  if(header == NONE)
+  if(!chainPartnerID && header == NONE)
   {
-    sharingChain = true;
-    updateTxBuf(CHAIN, myID, senderID, ACK, 0, NULL);
+    dbg_write_str("Received chain request\n");
+
+    // save partner ID, get filter ready for chain sharing requests, send chain ack
+    chainPartnerID = rxBuf[0];
+    updateFilter(CHAIN, chainPartnerID, myID, SHARE, STF0M);
+    updateTxBuf(CHAIN, myID, chainPartnerID, ACK, 0, NULL);
     CANSend(CHAIN);
   }
   // receive ACK, respond SHARE
@@ -250,28 +245,41 @@ static void rxChain(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
   {
     dbg_write_str("Discovery handshake completed\n");
 
-    updateFilter(CHAIN, senderID, myID, BLOCK, STF0M);
-    updateTxBuf(CHAIN, myID, senderID, SHARE, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
+    // save partner ID, get filter ready for block responses, and send request for first block
+    chainPartnerID = senderID;
+    updateFilter(CHAIN, chainPartnerID, myID, BLOCK, STF0M);
+    updateTxBuf(CHAIN, myID, chainPartnerID, SHARE, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
     CANSend(CHAIN);
   }
   // receive SHARE, respond BLOCK
   else if(header == SHARE)
   {
+    dbg_write_str("Received chain block request\n");
+
+    // get the currrent byte position from data buffer
     uint32_t oldBytesPos = *(uint32_t *)rxBuf;
+
+    // calculate how many bytes are left until the end of the chain
     uint32_t bytesUntilEnd = (height * sizeof(Block)) - oldBytesPos;
 
+    // if there is more data, send out bytes
+    // bytes sent is either the full message size, or whatever might be remaining
     if(bytesUntilEnd > 0)
     {
       uint32_t newBytesPos = oldBytesPos + (bytesUntilEnd > CAN_MESSAGE_SIZE ? CAN_MESSAGE_SIZE : bytesUntilEnd);
   
-      updateTxBuf(CHAIN, myID, senderID, BLOCK, newBytesPos - oldBytesPos, &((uint8_t *)&blockchain)[oldBytesPos]);
+      updateTxBuf(CHAIN, myID, chainPartnerID, BLOCK, newBytesPos - oldBytesPos, &((uint8_t *)&blockchain)[oldBytesPos]);
     }
+    // send block response with length of 0 to indicate completion
     else
     {
-      updateTxBuf(CHAIN, myID, senderID, END, 0, NULL);
-      sharingChain = false;
+      dbg_write_str("Full chain sent\n");
+
+      updateTxBuf(CHAIN, myID, chainPartnerID, BLOCK, 0, NULL);
+      chainPartnerID = 0;
       resetFilters();
     }
+
     CANSend(CHAIN);
   }
   // receive BLOCK, respond SHARE
@@ -279,16 +287,34 @@ static void rxChain(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
   {
     dbg_write_str("Received discovery block\n");
 
-    if(storePartialBlock(rxBuf, len))
+    // no more data sent, meaning discovery is done
+    if(len == 0)
     {
-      updateTxBuf(CHAIN, myID, senderID, SHARE, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
+      dbg_write_str("Completed discovery\n");
+      dbg_write_u32(&blockchain[0].nonce, 1);
+      dbg_write_u16(&height, 1);
+
+      chainPartnerID = 0;
+      longestChainPeerID = 0;
+      longestChainHeight = 0;
+      blockBytesPos = 0;
+      doingDiscovery = false;
+      discoverySuccess = true;
+      resetFilters();
+    }
+    // we successfully receive the data into a partial block buffer, so we can send a request for the next set of bytes
+    else if(storePartialBlock(rxBuf, len))
+    {
+      updateTxBuf(CHAIN, myID, chainPartnerID, SHARE, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
       CANSend(CHAIN);
     }
     // the block we received didn't validate properly, so we try discovery again
     else
     {
-      updateTxBuf(CHAIN, myID, senderID, ERROR, 0, NULL);
+      updateTxBuf(CHAIN, myID, chainPartnerID, ERROR, 0, NULL);
       CANSend(CHAIN);
+
+      chainPartnerID = 0;
       longestChainPeerID = 0;
       longestChainHeight = 0;
       blockBytesPos = 0;
@@ -297,24 +323,10 @@ static void rxChain(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
       resetFilters();
     }
   }
-  // receive END, finished
-  else if(header == END)
-  {
-    dbg_write_str("Completed discovery\n");
-    dbg_write_u32(&blockchain[0].nonce, 1);
-    dbg_write_u16(&height, 1);
-
-    longestChainPeerID = 0;
-    longestChainHeight = 0;
-    blockBytesPos = 0;
-    doingDiscovery = false;
-    discoverySuccess = true;
-    resetFilters();
-  }
   // our chain is invalid, so we need to discover a new chain
   else if(header == ERROR)
   {
-    sharingChain = false;
+    chainPartnerID = 0;
 
     // clear out blockchain
     Block empty = {0};
@@ -350,53 +362,61 @@ static void rxCallback(uint8_t len, uint32_t id)
 static void discover()
 {
   discoverySuccess = false;
+  chainPartnerID = 0;
   doingDiscovery = true;
+  uint32_t now;
 
   // keep trying to discover until we successfully get a valid chain
   while(!discoverySuccess)
   {
-    // ask everyone on network for their chain heights and IDs
     updateFilter(DISCOVER, BROADCAST_ID, myID, SHARE, STF0M);
     updateTxBuf(DISCOVER, BROADCAST_ID, BROADCAST_ID, NONE, 1, &myID);
-    CANSend(DISCOVER);
 
-    // wait a bit to get responses
-    delay(DISCOVERY_TIMEOUT);
+    // keep sending discovery requests until we get a response from a peer
+    while(!longestChainPeerID)
+    {
+      // ask everyone on network for their chain heights and IDs
+      CANSend(DISCOVER);
+  
+      // wait a bit to get responses
+      now = elapsedMS();
+      while(!longestChainPeerID && (elapsedMS() - now < DISCOVERY_TIMEOUT));
+    }
 
-    dbg_write_u16(&height, 1);
+    dbg_write_u16(&longestChainHeight, 1);
     dbg_write_u8(&longestChainPeerID, 1);
 
-    // ask first peer that responded with the longest chain for their blockchain
+    // ask last peer that responded with the longest chain for their blockchain
     updateFilter(CHAIN, longestChainPeerID, myID, ACK, STF0M);
-    updateTxBuf(CHAIN, myID, longestChainPeerID, NONE, 0, NULL);
-    CANSend(CHAIN);
+    updateTxBuf(CHAIN, BROADCAST_ID, longestChainPeerID, NONE, 1, &myID);
+    
+    // keep sending the chain request, since they may not be ready to share with us if they are currently sharing with another peer
+    while(!chainPartnerID)
+    {
+      CANSend(CHAIN);
 
-    // wait in this loop while we try to complete discovery.
+      now = elapsedMS();
+      while(!chainPartnerID && (elapsedMS() - now < DISCOVERY_TIMEOUT));
+    }
+
+    // wait in this loop while receving the chain from our partner peer.
     while(doingDiscovery);
   }
+
+  resetFilters();
 }
 
 static void startup()
 {
   readParams();
-  icmInit();
-  CANInit(rxFifoStart, NULL, txBufStart, extendedFilterStart, RX_FIFO_ELEMENT_COUNT, 0, TX_BUF_ELEMENT_COUNT, EXTENDED_FILTER_COUNT, rxBuf, rxCallback);
-  heartInit();
-  trngInit();
-
-  // setup filters
-  resetFilters();
-
-  // setup transmit buffers
-  resetTxBufs();
-
-  // LED output
-  PORT_REGS->GROUP[0].PORT_DIRSET = PORT_PA14;
-  PORT_REGS->GROUP[0].PORT_OUTSET = PORT_PA14;
 
   // start node initializes blockchain on startup, all others do consensus on startup
   if(startNode)
   {
+    doingDiscovery = false;
+    chainPartnerID = 0;
+    discoverySuccess = true;
+
     blockchain[0].nonce = UINT32_MAX;
     blockchain[0].transaction.amt = 0;
     blockchain[0].transaction.srcID = 0;
@@ -404,6 +424,28 @@ static void startup()
     height++;
   }
   else
+  {
+    doingDiscovery = true;
+    chainPartnerID = 0;
+    discoverySuccess = false;
+  }
+  
+  icmInit();
+  CANInit(rxFifoStart, NULL, txBufStart, extendedFilterStart, RX_FIFO_ELEMENT_COUNT, 0, TX_BUF_ELEMENT_COUNT, EXTENDED_FILTER_COUNT, rxBuf, rxCallback);
+  heartInit();
+  trngInit();
+
+  // setup filters
+  resetFilters();
+  
+  // setup transmit buffers
+  resetTxBufs();
+  
+  // LED output
+  PORT_REGS->GROUP[0].PORT_DIRSET = PORT_PA14;
+  PORT_REGS->GROUP[0].PORT_OUTSET = PORT_PA14;
+  
+  if(!startNode)
   {
     discover();
   }
@@ -423,8 +465,6 @@ int main()
   // timestamps for event scheduling
   uint32_t flashTimestamp = 0;
   uint32_t pulseTimestamp = 0;
-  uint32_t consensusTimestamp = CONSENSUS_RATE + trngRandom(1001) + 1000;
-  uint32_t peerCheckTimestamp = PEER_CHECK_RATE;
 
   for(;;)
   {
@@ -435,16 +475,6 @@ int main()
       CANSend(PULSE);
       pulseTimestamp = msCount + PULSE_RATE;
     }
-    // if(msCount >= consensusTimestamp)
-    // {
-    //   consensus();
-    //   consensusTimestamp = msCount + CONSENSUS_RATE + trngRandom(1001) + 1000;
-    // }
-    // if(msCount >= peerCheckTimestamp)
-    // {
-    //   peerCheck(msCount);
-    //   peerCheckTimestamp = msCount + PEER_CHECK_RATE;
-    // }
     if(msCount >= flashTimestamp)
     {
       PORT_REGS->GROUP[0].PORT_OUTTGL = PORT_PA14;

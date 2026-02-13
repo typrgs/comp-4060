@@ -22,7 +22,6 @@ typedef enum HEADER_TYPE
   ACK,
   SHARE,
   BLOCK,
-  END,
   ERROR,
   NUM_HEADER_TYPES
 } HeaderType;
