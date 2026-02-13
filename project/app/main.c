@@ -23,7 +23,7 @@ static uint8_t rxBuf[CAN_MESSAGE_SIZE];
 
 #define BLINK_RATE 500 // ms
 #define PULSE_RATE 5000 // ms
-#define PEER_CHECK_RATE 15000 // ms
+#define PEER_CHECK_RATE PULSE_RATE * 2 // ms
 #define CONSENSUS_RATE 10000 // ms
 
 #define DISCOVERY_TIMEOUT 1000 // ms
@@ -37,7 +37,7 @@ static CANExtFilter filters[NUM_MSG_TYPES] = {0};
 static bool startNode = false;
 
 static uint8_t myID;
-static bool activePeers[UINT8_MAX] = {0};
+static uint32_t activePeers[UINT8_MAX] = {0};
 
 static Block blockchain[BLOCKCHAIN_SIZE] = {0};
 static uint16_t height = 0;
@@ -184,6 +184,38 @@ static bool storePartialBlock(uint8_t *rxBuf, uint8_t len)
   return result;
 }
 
+static uint8_t condenseArray(uint8_t *arr, uint8_t size, uint8_t *condensedArr)
+{
+  uint8_t len = 0;
+
+  // squish non-zero arr contents into the start of condensedArr
+  for(uint8_t i=0; i<size; i++)
+  {
+    if(arr[i])
+    {
+      condensedArr[len++] = arr[i];
+    }
+  }
+
+  return len;
+}
+
+static void peerCheck(uint32_t *activePeers)
+{
+  uint32_t now = elapsedMS();
+
+  for(uint8_t i=0; i<UINT8_MAX; i++)
+  {
+    if(activePeers[i])
+    {
+      // check if each peer has recently pulsed 
+      if(now - activePeers[i] > PULSE_RATE)
+      {
+        activePeers[i] = 0;
+      }
+    }
+  }
+}
 
 static void rxPulse(uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
 {
@@ -192,7 +224,7 @@ static void rxPulse(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
   dbg_write_char('\n');
 
   // mark peer as active
-  activePeers[rxBuf[0]] = true;
+  activePeers[rxBuf[0]] = elapsedMS();
 }
 
 static void rxDiscover(uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
@@ -276,6 +308,7 @@ static void rxChain(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
       dbg_write_str("Full chain sent\n");
 
       updateTxBuf(CHAIN, myID, chainPartnerID, BLOCK, 0, NULL);
+      activePeers[chainPartnerID] = true;
       chainPartnerID = 0;
       resetFilters();
     }
@@ -465,6 +498,7 @@ int main()
   // timestamps for event scheduling
   uint32_t flashTimestamp = 0;
   uint32_t pulseTimestamp = 0;
+  uint32_t peerCheckTimestamp = PEER_CHECK_RATE;
 
   for(;;)
   {
@@ -474,6 +508,11 @@ int main()
     {
       CANSend(PULSE);
       pulseTimestamp = msCount + PULSE_RATE;
+    }
+    if(msCount >= peerCheckTimestamp)
+    {
+      peerCheck(activePeers);
+      peerCheckTimestamp = msCount + PEER_CHECK_RATE;
     }
     if(msCount >= flashTimestamp)
     {
