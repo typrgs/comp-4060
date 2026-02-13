@@ -2,6 +2,7 @@
 
 #include "common.h"
 
+#define BLOCKCHAIN_SIZE UINT8_MAX * 2
 #define BLOCK_HASH_SIZE 32 // bytes
 
 typedef struct TRANSACTION

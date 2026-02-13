@@ -40,12 +40,14 @@ static bool startNode = false;
 static uint8_t myID;
 static bool activePeers[UINT8_MAX] = {0};
 
-static Block blockchain[UINT8_MAX * 2] = {0};
+static Block blockchain[BLOCKCHAIN_SIZE] = {0};
 static uint16_t height = 0;
+static uint8_t longestChainPeerID = 0;
+static uint16_t longestChainHeight = 0;
 
-// state variables
-static bool waitingForConsensus = false;
-static bool doingConsensus = false;
+static bool doingDiscovery = true;
+static bool discoverySuccess = false;
+static bool sharingChain = false;
 static uint8_t partialBlock[sizeof(Block)];
 static uint8_t partialBlockPos = 0;
 
@@ -53,6 +55,15 @@ static uint32_t blockBytesPos = 0;
 
 static bool receivingNewBlock = false;
 
+static void discover();
+
+
+static void delay(uint32_t ms)
+{
+  uint32_t now = elapsedMS();
+
+  while((elapsedMS() - now) < ms);
+}
 
 static void readParams()
 {
@@ -98,20 +109,19 @@ static void updateFilter(MsgType msgType, uint8_t senderID, uint8_t receiverID, 
   CANUpdateFilter(filters[msgType]);
 }
 
-static void setupFilters()
+static void resetFilters()
 {
-  // setup pulse, consensus, and block filters with broadcast ID and set as enabled
   for(MsgType i=PULSE; i<NUM_MSG_TYPES; i++)
   {
-    updateFilter(i, BROADCAST_ID, BROADCAST_ID, 0, STF0M);
+    updateFilter(i, BROADCAST_ID, BROADCAST_ID, NONE, STF0M);
   }
 }
 
-static void setupTxBufs()
+static void resetTxBufs()
 {
   updateTxBuf(PULSE, BROADCAST_ID, BROADCAST_ID, 0, 1, &myID);
 
-  for(MsgType i=CONSENSUS; i<NUM_MSG_TYPES; i++)
+  for(MsgType i=CHAIN; i<NUM_MSG_TYPES; i++)
   {
     updateTxBuf(i, myID, BROADCAST_ID, 0, 0, NULL);
   }
@@ -145,37 +155,43 @@ static bool verifyBlock(Block toVerify)
   return true;
 }
 
-static bool sendBlockMessage(uint16_t heightConsidered, uint8_t *blockBytesPtr, uint64_t currBytePos, uint8_t to, uint8_t from, HeaderType header)
+static bool storePartialBlock(uint8_t *rxBuf, uint8_t len)
 {
   bool result = true;
 
-  // check if there are still bytes to be sent for the block(s) we are sending
-  if(currBytePos < sizeof(Block) * heightConsidered)
+  // build block from received data
+  for(int i=0; i<len; i++)
   {
-    uint64_t oldBytesPos = currBytePos;
+    partialBlock[partialBlockPos++] = rxBuf[i];
+    
+    // check if a full block has been constructed
+    if(partialBlockPos == sizeof(Block))
+    {
+      // add block to chain if verification returns true
+      Block tempBlock = *((Block *)&partialBlock);
+      result = verifyBlock(tempBlock);
 
-    // check how many bytes are left until reaching the end of the set of blocks being sent
-    uint64_t bytesUntilEnd = (sizeof(Block) * heightConsidered) - currBytePos;
-
-    // advance the current byte position by the min of the bytes remaining and the max message size
-    currBytePos += (bytesUntilEnd >= CAN_MESSAGE_SIZE ? CAN_MESSAGE_SIZE : bytesUntilEnd);
+      if(result)
+      {
+        blockchain[height++] = tempBlock;
+      }
+      
+      // reset partial block buffer
+      for(int i=0; i<sizeof(Block); i++)
+      {
+        partialBlock[i] = 0;
+      }
+      partialBlockPos = 0;
+    }
+    
+    blockBytesPos++;
+  }
   
-    // update transmit buffer and send
-    updateTxBuf(BLOCK, from, to, header, currBytePos - oldBytesPos, &blockBytesPtr[oldBytesPos]);
-    CANSend(BLOCK);
-  }
-  // send end message if there are no more bytes to send
-  else
-  {
-    result = false;
-    updateTxBuf(END, from, to, header, 0, NULL);
-    CANSend(END);
-  }
-
   return result;
 }
 
-static void rxPulse(MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
+
+static void rxPulse(uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
 {
   dbg_write_str("Pulse from: ");
   dbg_write_u8(rxBuf, 1);
@@ -185,134 +201,137 @@ static void rxPulse(MsgType type, uint8_t senderID, uint8_t receiverID, HeaderTy
   activePeers[rxBuf[0]] = true;
 }
 
-static void rxDiscover(MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
+static void rxDiscover(uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
 {
-  activePeers[rxBuf[0]] = true;
-
-  // a new peer has joined and wants to know who is on the network
-  if(header == SHARE)
+  if(!sharingChain && !doingDiscovery)
   {
-    updateTxBuf(DISCOVER, BROADCAST_ID, rxBuf[0], NONE, 1, &myID);
-    CANSend(DISCOVER);
-  }
-}
-
-static void rxConsensus(MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
-{
-  // we have received a consensus request from someone on the network
-  if(header == NONE && !doingConsensus)
-  {
-    uint8_t consensusReqID = rxBuf[0];
-    activePeers[consensusReqID] = true;
-
-    // set this flag to temporarily prevent acceptance of other consensus requests
-    doingConsensus = true;
-
-    dbg_write_str("Sharing blocks with ");
-    dbg_write_u8(&consensusReqID, 1);
-    dbg_write_char('\n');
+    // someone is joining the network and they want to find out the longest chain
+    if(header == NONE)
+    {
+      // place ID and height into data buffer
+      uint8_t data[sizeof(height) + sizeof(myID)];
+      data[0] = myID;
+      data[1] = ((uint8_t *)&height)[0];
+      data[2] = ((uint8_t *)&height)[1];
   
-    // update consensus filter with partner ID to reject all other consensus requests
-    updateFilter(CONSENSUS, consensusReqID, myID, ACK, STF0M);
-    
-    // setup consensus buffer to send confirmation to src peer
-    updateTxBuf(CONSENSUS, BROADCAST_ID, consensusReqID, ACK, 1, &myID);
-    CANSend(CONSENSUS);
-  }
-  else if(header == ACK && (doingConsensus || waitingForConsensus))
-  {
-    // we've completed the consensus handshake, and now it is time to request the blockchain
-    if(senderID == BROADCAST_ID && receiverID == myID)
-    {
-      dbg_write_str("Consensus handshake completed\n");
-
-      doingConsensus = true;
-      waitingForConsensus = false;
-      
-      // setup filter to only accept consensus blocks from partner
-      uint8_t partnerID = rxBuf[0];
-      updateFilter(BLOCK, partnerID, myID, SHARE, STF0M);
-      
-      // send request for first block
-      blockBytesPos = 0;
-      updateTxBuf(CONSENSUS, myID, partnerID, ACK, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
-      CANSend(CONSENSUS);
+      updateTxBuf(DISCOVER, BROADCAST_ID, rxBuf[0], SHARE, sizeof(data), data);
+      CANSend(DISCOVER);
+  
+      // setup filter just in case they select us to share our chain
+      updateFilter(CHAIN, rxBuf[0], myID, NONE, STF0M);
     }
-    // we are sharing our blockchain
-    else if(senderID != BROADCAST_ID && receiverID == myID)
+    else if(header == SHARE)
     {
-      dbg_write_str("Beginning to send blocks\n");
-
-      // send blocks, starting from the point they send us
-      uint8_t currBytePos = rxBuf[0];
+      // extract data from buffer
+      uint8_t peer = rxBuf[0];
+      uint16_t receivedHeight = *(uint16_t *)(&rxBuf[1]);
       
-      // if we sent an end message instead, reset the consensus filter to receive future requests
-      if(!sendBlockMessage(height, (uint8_t *)&blockchain, currBytePos, senderID, myID, SHARE))
+      // save the received height if larger than the currently saved value
+      if(receivedHeight > longestChainHeight)
       {
-        doingConsensus = false;
-        updateFilter(CONSENSUS, BROADCAST_ID, BROADCAST_ID, NONE, STF0M);  
+        longestChainHeight = receivedHeight;
+        longestChainPeerID = peer;
       }
     }
   }
 }
 
-static void rxBlock(MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
+static void rxChain(uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
 {
-  dbg_write_str("Receiving block from ");
-  dbg_write_u8(&senderID, 1);
-  dbg_write_char('\n');
-
-  if(senderID == BROADCAST_ID && receiverID == BROADCAST_ID && header == NEW)
+  // receive NONE, respond ACK
+  if(header == NONE)
   {
-    receivingNewBlock = true;
+    sharingChain = true;
+    updateTxBuf(CHAIN, myID, senderID, ACK, 0, NULL);
+    CANSend(CHAIN);
   }
-
-  // build block from received data
-  for(int i=0; i<len; i++)
+  // receive ACK, respond SHARE
+  else if(header == ACK)
   {
-    partialBlock[partialBlockPos++] = rxBuf[i];
-    blockBytesPos++;
+    dbg_write_str("Discovery handshake completed\n");
+
+    updateFilter(CHAIN, senderID, myID, BLOCK, STF0M);
+    updateTxBuf(CHAIN, myID, senderID, SHARE, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
+    CANSend(CHAIN);
   }
-
-  // check if a full block has been constructed
-  if(partialBlockPos == sizeof(Block))
+  // receive SHARE, respond BLOCK
+  else if(header == SHARE)
   {
-    // add block to chain if verification returns true
-    Block tempBlock = *((Block *)partialBlock);
-    if(verifyBlock(tempBlock))
+    uint32_t oldBytesPos = *(uint32_t *)rxBuf;
+    uint32_t bytesUntilEnd = (height * sizeof(Block)) - oldBytesPos;
+
+    if(bytesUntilEnd > 0)
     {
-      blockchain[height++] = tempBlock;
+      uint32_t newBytesPos = oldBytesPos + (bytesUntilEnd > CAN_MESSAGE_SIZE ? CAN_MESSAGE_SIZE : bytesUntilEnd);
+  
+      updateTxBuf(CHAIN, myID, senderID, BLOCK, newBytesPos - oldBytesPos, &((uint8_t *)&blockchain)[oldBytesPos]);
     }
-
-    // reset partial block buffer
-    for(int i=0; i<sizeof(Block); i++)
+    else
     {
-      partialBlock[i] = 0;
+      updateTxBuf(CHAIN, myID, senderID, END, 0, NULL);
+      sharingChain = false;
+      resetFilters();
     }
-    partialBlockPos = 0;
+    CANSend(CHAIN);
   }
-
-  if(header == SHARE)
+  // receive BLOCK, respond SHARE
+  else if(header == BLOCK)
   {
-    updateTxBuf(CONSENSUS, myID, senderID, ACK, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
-    CANSend(CONSENSUS);
+    dbg_write_str("Received discovery block\n");
+
+    if(storePartialBlock(rxBuf, len))
+    {
+      updateTxBuf(CHAIN, myID, senderID, SHARE, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
+      CANSend(CHAIN);
+    }
+    // the block we received didn't validate properly, so we try discovery again
+    else
+    {
+      updateTxBuf(CHAIN, myID, senderID, ERROR, 0, NULL);
+      CANSend(CHAIN);
+      longestChainPeerID = 0;
+      longestChainHeight = 0;
+      blockBytesPos = 0;
+      doingDiscovery = false;
+      discoverySuccess = false;
+      resetFilters();
+    }
+  }
+  // receive END, finished
+  else if(header == END)
+  {
+    dbg_write_str("Completed discovery\n");
+    dbg_write_u32(&blockchain[0].nonce, 1);
+    dbg_write_u16(&height, 1);
+
+    longestChainPeerID = 0;
+    longestChainHeight = 0;
+    blockBytesPos = 0;
+    doingDiscovery = false;
+    discoverySuccess = true;
+    resetFilters();
+  }
+  // our chain is invalid, so we need to discover a new chain
+  else if(header == ERROR)
+  {
+    sharingChain = false;
+
+    // clear out blockchain
+    Block empty = {0};
+    for(uint16_t i=0; i<BLOCKCHAIN_SIZE; i++)
+    {
+      blockchain[i] = empty;
+    }
+    height = 0;
+
+    // do discovery to get a valid chain
+    discover();
   }
 }
 
-static void rxEnd(MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
+static void rxNew(uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
 {
-  dbg_write_str("Received all blocks\n");
 
-  if(header == SHARE)
-  {
-    dbg_write_str("Consensus complete\n");
-    doingConsensus = false;
-  }
-  else if(header == NEW)
-  {
-    receivingNewBlock = false;
-  }
-  blockBytesPos = 0;
 }
 
 static void rxCallback(uint8_t len, uint32_t id)
@@ -323,56 +342,38 @@ static void rxCallback(uint8_t len, uint32_t id)
   uint8_t receiverID = idAsBytes[ID_RECEIVER_Pos];
   HeaderType header = idAsBytes[ID_HEADER_Pos] & 0x1F;
 
-  static void (*rxTypes[])(MsgType, uint8_t, uint8_t, HeaderType, uint8_t *, uint8_t) = {rxPulse, rxDiscover, rxConsensus, rxBlock, rxEnd};
+  static void (*rxTypes[])(uint8_t, uint8_t, HeaderType, uint8_t *, uint8_t) = {rxPulse, rxDiscover, rxChain, rxNew};
 
-  rxTypes[type](type, senderID, receiverID, header, rxBuf, len);
+  rxTypes[type](senderID, receiverID, header, rxBuf, len);
 }
 
-static void peerCheck()
+static void discover()
 {
-  // reset active peers
-  for(int i=0; i<UINT8_MAX; i++)
+  discoverySuccess = false;
+  doingDiscovery = true;
+
+  // keep trying to discover until we successfully get a valid chain
+  while(!discoverySuccess)
   {
-    activePeers[i] = 0;
+    // ask everyone on network for their chain heights and IDs
+    updateFilter(DISCOVER, BROADCAST_ID, myID, SHARE, STF0M);
+    updateTxBuf(DISCOVER, BROADCAST_ID, BROADCAST_ID, NONE, 1, &myID);
+    CANSend(DISCOVER);
+
+    // wait a bit to get responses
+    delay(DISCOVERY_TIMEOUT);
+
+    dbg_write_u16(&height, 1);
+    dbg_write_u8(&longestChainPeerID, 1);
+
+    // ask first peer that responded with the longest chain for their blockchain
+    updateFilter(CHAIN, longestChainPeerID, myID, ACK, STF0M);
+    updateTxBuf(CHAIN, myID, longestChainPeerID, NONE, 0, NULL);
+    CANSend(CHAIN);
+
+    // wait in this loop while we try to complete discovery.
+    while(doingDiscovery);
   }
-
-  // send discover request
-  updateTxBuf(DISCOVER, BROADCAST_ID, BROADCAST_ID, SHARE, 1, &myID);
-  updateFilter(DISCOVER, BROADCAST_ID, myID, ACK, STF0M);
-  CANSend(DISCOVER);
-}
-
-static void consensus()
-{
-  // initially, disable all filters while doing consensus
-  for(int i=0; i<NUM_MSG_TYPES; i++)
-  {
-    filters[i].config = DISABLE;
-  }
-
-  // setup ack filter
-  updateFilter(CONSENSUS, BROADCAST_ID, myID, ACK, STF0M);
-
-  // setup consensus buffer
-  updateTxBuf(CONSENSUS, BROADCAST_ID, BROADCAST_ID, 0, 1, (uint8_t *)&myID);
-
-  waitingForConsensus = true;
-
-  // broadcast consensus request until we get a response
-  while(waitingForConsensus)
-  {
-    CANSend(CONSENSUS);
-    
-    // delay for a bit before re-broadcasting the consensus request
-    uint32_t now = elapsedMS();
-    while(waitingForConsensus && (elapsedMS() - now < CONSENSUS_RESEND_TIMEOUT));
-  }
-  
-  // spin here while we receive blocks asynchronously and verify the chain, only finishing once we receive an end message
-  while(doingConsensus);
-
-  // reset filters for normal operation
-  setupFilters();
 }
 
 static void startup()
@@ -384,23 +385,14 @@ static void startup()
   trngInit();
 
   // setup filters
-  setupFilters();
+  resetFilters();
 
   // setup transmit buffers
-  setupTxBufs();
+  resetTxBufs();
 
   // LED output
   PORT_REGS->GROUP[0].PORT_DIRSET = PORT_PA14;
   PORT_REGS->GROUP[0].PORT_OUTSET = PORT_PA14;
-
-  // discover who is on the network
-  peerCheck();
-
-  // wait a bit to receive discovery responses
-  uint32_t now = elapsedMS();
-  while(elapsedMS() - now < DISCOVERY_TIMEOUT);
-
-  updateFilter(DISCOVER, BROADCAST_ID, BROADCAST_ID, SHARE, STF0M);
 
   // start node initializes blockchain on startup, all others do consensus on startup
   if(startNode)
@@ -413,7 +405,7 @@ static void startup()
   }
   else
   {
-    consensus();
+    discover();
   }
 }
 
@@ -443,16 +435,16 @@ int main()
       CANSend(PULSE);
       pulseTimestamp = msCount + PULSE_RATE;
     }
-    if(msCount >= consensusTimestamp)
-    {
-      consensus();
-      consensusTimestamp = msCount + CONSENSUS_RATE + trngRandom(1001) + 1000;
-    }
-    if(msCount >= peerCheckTimestamp)
-    {
-      peerCheck(msCount);
-      peerCheckTimestamp = msCount + PEER_CHECK_RATE;
-    }
+    // if(msCount >= consensusTimestamp)
+    // {
+    //   consensus();
+    //   consensusTimestamp = msCount + CONSENSUS_RATE + trngRandom(1001) + 1000;
+    // }
+    // if(msCount >= peerCheckTimestamp)
+    // {
+    //   peerCheck(msCount);
+    //   peerCheckTimestamp = msCount + PEER_CHECK_RATE;
+    // }
     if(msCount >= flashTimestamp)
     {
       PORT_REGS->GROUP[0].PORT_OUTTGL = PORT_PA14;
