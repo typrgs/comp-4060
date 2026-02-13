@@ -11,5 +11,5 @@ uint32_t trngRandom(uint32_t max)
   // wait for new data
   while((TRNG_REGS->TRNG_INTFLAG & TRNG_INTFLAG_DATARDY_Msk) == 0);
 
-  return (TRNG_REGS->TRNG_DATA % max);
+  return (max > 0) ? (TRNG_REGS->TRNG_DATA % max) : TRNG_REGS->TRNG_DATA;
 }

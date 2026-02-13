@@ -12,7 +12,8 @@ typedef enum MSG_TYPE
   PULSE,
   DISCOVER,
   CHAIN,
-  NEW,
+  NEW_RX,
+  NEW_TX,
   NUM_MSG_TYPES
 } MsgType;
 
