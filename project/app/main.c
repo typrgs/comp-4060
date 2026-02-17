@@ -155,6 +155,16 @@ static bool findBlock(Block key)
   return false;
 }
 
+static void printBlock(Block block)
+{
+  dbg_write_u8(&block.transaction.srcID, 1);
+  dbg_write_u8(&block.transaction.destID, 1);
+  dbg_write_u32(&block.transaction.amt, 1);
+  dbg_write_u32(&block.nonce, 1);
+  dbg_write_u8(block.prevHash, 3);
+  dbg_write_char('\n');
+}
+
 static bool verifyBlock(Block toVerify)
 {
   if(findBlock(toVerify))
@@ -168,11 +178,11 @@ static bool verifyBlock(Block toVerify)
   else if(height > 0)
   {
     // hash current top block for use in comparison
-    uint8_t prevHash[BLOCK_HASH_SIZE];
+    uint8_t prevHash[BLOCK_HASH_SIZE] = {0};
 
     // msg length is sizeof(Block) * 2 because the length of a hex string needed to represent the size is twice the total amount of bytes
     // (each byte is represented by 8 bits = 2 hex digits)
-    icmSHA256((uint8_t *)&(blockchain[height]), sizeof(Block) * 2, prevHash);
+    icmSHA256((uint8_t *)&(blockchain[height-1]), sizeof(Block), prevHash);
 
     for(int i=0; i<BLOCK_HASH_SIZE; i++)
     {
@@ -199,20 +209,20 @@ static bool storePartialBlock(uint8_t *rxBuf, uint8_t len)
     if(partialBlockPos == sizeof(Block))
     {
       // add block to chain if verification returns true
-      Block tempBlock = *((Block *)&partialBlock);
+      Block tempBlock = *((Block *)partialBlock);
+      dbg_write_str("Full block constructed ");
+      printBlock(tempBlock);
       result = verifyBlock(tempBlock);
 
       if(result)
       {
         dbg_write_str("New block added ");
-        dbg_write_u8(&tempBlock.transaction.srcID, 1);
-        dbg_write_u8(&tempBlock.transaction.destID, 1);
-        dbg_write_u32(&tempBlock.transaction.amt, 1);
-        dbg_write_u32(&tempBlock.nonce, 1);
+        printBlock(tempBlock);
 
         blockAdded = true;
         blockchain[height++] = tempBlock;
       }
+      else dbg_write_str("Block failed to verify\n");
       
       // reset partial block buffer
       for(int i=0; i<sizeof(Block); i++)
@@ -228,23 +238,20 @@ static bool storePartialBlock(uint8_t *rxBuf, uint8_t len)
   return result;
 }
 
-static bool sendBlock(uint16_t height, uint8_t *blockBytes, MsgType type, uint8_t senderID, uint8_t receiverID)
+static bool sendBlock(uint16_t height, uint8_t *blockBytes, uint32_t bytesPos, MsgType type, uint8_t senderID, uint8_t receiverID)
 {
   bool finished = false;
 
-  // get the currrent byte position from data buffer
-  uint32_t oldBytesPos = *(uint32_t *)rxBuf;
-
   // calculate how many bytes are left until the end of the chain
-  uint32_t bytesUntilEnd = (height * sizeof(Block)) - oldBytesPos;
+  uint32_t bytesUntilEnd = (height * sizeof(Block)) - bytesPos;
 
   // if there is more data, send out bytes
   // bytes sent is either the full message size, or whatever might be remaining
   if(bytesUntilEnd > 0)
   {
-    uint32_t newBytesPos = oldBytesPos + (bytesUntilEnd > CAN_MESSAGE_SIZE ? CAN_MESSAGE_SIZE : bytesUntilEnd);
+    uint32_t newBytesPos = bytesPos + (bytesUntilEnd > CAN_MESSAGE_SIZE ? CAN_MESSAGE_SIZE : bytesUntilEnd);
 
-    updateTxBuf(type, senderID, receiverID, BLOCK, newBytesPos - oldBytesPos, &blockBytes[oldBytesPos]);
+    updateTxBuf(type, senderID, receiverID, BLOCK, newBytesPos - bytesPos, &blockBytes[bytesPos]);
   }
   // send block response with length of 0 to indicate completion
   else
@@ -258,20 +265,43 @@ static bool sendBlock(uint16_t height, uint8_t *blockBytes, MsgType type, uint8_
   return finished;
 }
 
-static uint8_t condenseArray(uint32_t *arr, uint8_t size, uint32_t *condensedArr)
+static uint8_t condenseActivePeers(uint32_t *arr, uint8_t *condensedArr)
 {
   uint8_t len = 0;
 
   // squish non-zero arr contents into the start of condensedArr
-  for(uint8_t i=0; i<size; i++)
+  for(uint8_t i=0; i<UINT8_MAX; i++)
   {
-    if(arr[i])
+    if(activePeers[i])
     {
-      condensedArr[len++] = arr[i];
+      condensedArr[len++] = i;
     }
   }
 
   return len;
+}
+
+static uint8_t removeFromArray(uint8_t *arr, uint8_t size, uint8_t element)
+{
+  uint8_t newSize = size;
+  int pos = -1;
+
+  for(uint8_t i=0; i<size && pos<0; i++)
+  {
+    if(arr[i] == element) pos = i;
+  }
+
+  if(pos > 0)
+  {
+    for(uint8_t i=pos; i<size-1; i++)
+    {
+      arr[i] = arr[i+1];
+    }
+
+    newSize--;
+  }
+
+  return newSize;
 }
 
 static void peerCheck(uint32_t *activePeers)
@@ -338,41 +368,38 @@ static void discover()
   resetFilters();
 }
 
-static void sendNewBlock(uint8_t minerID, uint16_t blockHeight, Transaction transaction)
+static void sendNewestBlock()
 {
-  // build new block
-  newBlock.transaction = transaction;
-  newBlock.minerID = minerID;
-  newBlock.height = blockHeight;
-  newBlock.nonce = trngRandom(0);
-  icmSHA256((uint8_t *)&blockchain[height-1], sizeof(Block) * 2, newBlock.prevHash);
+  while(chainPartnerID);
 
-  if(minerID == myID)
-  {
-    // add new block to our blockchain
-    blockchain[height++] = newBlock;
-  }
+  // build new block
+  newBlock = blockchain[height-1];
+
+  dbg_write_str("New block sent ");
+  printBlock(newBlock);
 
   // choose peer to send new block for propagation
-  uint32_t condensedPeers[UINT8_MAX];
-  uint8_t len = condenseArray(activePeers, UINT8_MAX, condensedPeers);
+  uint8_t condensedPeers[UINT8_MAX] = {0};
+  uint8_t len = condenseActivePeers(activePeers, condensedPeers);
+
+  // make sure we don't send the block back to whoever we got it from (if we didn't mine it)
+  len = removeFromArray(condensedPeers, len, newBlock.minerID);
 
   if(len > 0)
   {
-    uint8_t sentPeer = condensedPeers[trngRandom(len)]; 
-    
-    // make sure we don't send the block back to whoever we got it from (if we didn't mine it)
-    while(sentPeer == newBlockRxPartnerID)
-    {
-      sentPeer = condensedPeers[trngRandom(len)];
-    }
+    uint8_t sentPeer = condensedPeers[trngRandom(len)];
   
+    dbg_write_str("Sent peer is ");
+    dbg_write_u8(&sentPeer, 1);
+    dbg_write_char('\n');
+
     // send request
     updateFilter(NEW_TX, sentPeer, myID, SHARE, STF0M);
     updateTxBuf(NEW_RX, BROADCAST_ID, sentPeer, NONE, 1, &myID);
     
     while(!newBlockTxPartnerID)
     {
+      dbg_write_str("Sending new block receive request\n");
       CANSend(NEW_RX);
 
       uint32_t now = elapsedMS();
@@ -453,7 +480,7 @@ static void rxChain(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
   {
     dbg_write_str("Received chain block request\n");
 
-    if(sendBlock(height, (uint8_t *)&blockchain, CHAIN, myID, chainPartnerID))
+    if(sendBlock(height, (uint8_t *)&blockchain, *(uint32_t *)rxBuf, CHAIN, myID, chainPartnerID))
     {
       dbg_write_str("Full chain sent\n");
       chainPartnerID = 0;
@@ -469,8 +496,6 @@ static void rxChain(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
     if(len == 0)
     {
       dbg_write_str("Completed discovery\n");
-      dbg_write_u32(&blockchain[0].nonce, 1);
-      dbg_write_u16(&height, 1);
 
       chainPartnerID = 0;
       longestChainPeerID = 0;
@@ -522,12 +547,14 @@ static void rxChain(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
 
 static void rxNewRx(uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
 {
-  if(!newBlockRxPartnerID && header == NONE)
+  if(!doingDiscovery && !newBlockRxPartnerID && header == NONE)
   {
-    dbg_write_str("Received new block transmit request\n");
-
     newBlockRxPartnerID = rxBuf[0];
     blockBytesPos = 0;
+    
+    dbg_write_str("Received new block transmit request from ");
+    dbg_write_u8(&newBlockRxPartnerID, 1);
+    dbg_write_char('\n');
 
     updateFilter(NEW_RX, newBlockRxPartnerID, myID, BLOCK, STF0M);
     updateTxBuf(NEW_TX, myID, newBlockRxPartnerID, SHARE, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
@@ -535,28 +562,23 @@ static void rxNewRx(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
   }
   else if(header == BLOCK)
   {
-    dbg_write_str("Received new block\n");
-
     // no more data sent, meaning block was fully received
     if(len == 0)
     {
-      dbg_write_str("Completed new block receive\n");
+      dbg_write_str("Completed new block receive, height ");
+      dbg_write_u16(&height, 1);
+      dbg_write_char('\n');
 
-      newBlockRxPartnerID = 0;
-
-      // if the new block was added to our blockchain, we continue to propagate it
-      if(blockAdded)
-      {
-        Block added = blockchain[height-1];
-        sendNewBlock(added.minerID, added.height, added.transaction);
-      }
-
-      blockAdded = false;
       resetFilters();
+      
+      blockBytesPos = 0;
+      partialBlockPos = 0;
+      newBlockRxPartnerID = 0;
     }
     // we successfully receive the data into a partial block buffer, so we can send a request for the next set of bytes
     else if(storePartialBlock(rxBuf, len))
     {
+      dbg_write_str("New block bytes stored\n");
       updateTxBuf(NEW_TX, myID, newBlockRxPartnerID, SHARE, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
       CANSend(NEW_TX);
     }
@@ -564,6 +586,8 @@ static void rxNewRx(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
     else
     {
       newBlockRxPartnerID = 0;
+      blockBytesPos = 0;
+      partialBlockPos = 0;
       resetFilters();
     }
   }
@@ -571,13 +595,15 @@ static void rxNewRx(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
 
 static void rxNewTx(uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
 {
-  if(!newBlockTxPartnerID && header == SHARE)
+  if(header == SHARE)
   {
-    dbg_write_str("Received new block receive request\n");
-
     newBlockTxPartnerID = senderID;
+    
+    dbg_write_str("Sending partial block to ");
+    dbg_write_u8(&senderID, 1);
+    dbg_write_char('\n');
 
-    if(sendBlock(1, (uint8_t *)&newBlock, NEW_RX, myID, newBlockTxPartnerID))
+    if(sendBlock(1, (uint8_t *)&newBlock, *(uint32_t *)rxBuf, NEW_RX, myID, newBlockTxPartnerID))
     {
       dbg_write_str("Full block sent\n");
 
@@ -617,6 +643,9 @@ static void startup()
     blockchain[0].transaction.srcID = 0;
     blockchain[0].transaction.destID = 0;
     height++;
+
+    dbg_write_str("Block added ");
+    printBlock(blockchain[height-1]);
   }
   else
   {
@@ -644,6 +673,19 @@ static void startup()
   {
     discover();
   }
+  else
+  {
+    // start node adds an extra random block to its chain on startup
+    Transaction newTransaction = {trngRandom(100), trngRandom(100), trngRandom(0)};
+    blockchain[height].minerID = myID;
+    blockchain[height].nonce = trngRandom(0);
+    blockchain[height].height = height;
+    blockchain[height].transaction = newTransaction;
+    icmSHA256((uint8_t *)&blockchain[0], sizeof(Block), blockchain[1].prevHash);
+    height++;
+    dbg_write_str("Block added ");
+    printBlock(blockchain[height-1]);
+  }
 }
 
 int main()
@@ -661,7 +703,7 @@ int main()
   uint32_t flashTimestamp = 0;
   uint32_t pulseTimestamp = 0;
   uint32_t peerCheckTimestamp = PEER_CHECK_RATE;
-  uint32_t newBlockTimestamp = trngRandom(1001) + 3000;
+  uint32_t newBlockTimestamp = trngRandom(5001) + 8000;
 
   for(;;)
   {
@@ -679,8 +721,21 @@ int main()
     }
     if(msCount >= newBlockTimestamp)
     {
-      Transaction newTransaction = {trngRandom(100), trngRandom(100), trngRandom(0)};
-      sendNewBlock(myID, height, newTransaction);
+      if(startNode)
+      {
+        Transaction newTransaction = {trngRandom(100), trngRandom(100), trngRandom(0)};
+        blockchain[height].minerID = myID;
+        blockchain[height].nonce = trngRandom(0);
+        blockchain[height].height = height;
+        blockchain[height].transaction = newTransaction;
+        icmSHA256((uint8_t *)&blockchain[height-1], sizeof(Block), blockchain[height].prevHash);
+        height++;
+
+        dbg_write_str("Mined new block ");
+        printBlock(blockchain[height-1]);
+        sendNewestBlock();
+      }
+      newBlockTimestamp = msCount + trngRandom(5001) + 8000;
     }
     if(msCount >= flashTimestamp)
     {
