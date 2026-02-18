@@ -2,21 +2,19 @@
 
 #define CS_PIN PORT_PB05;
 
-uint32_t *rxFifo0 = NULL;
-uint32_t *rxFifo1 = NULL;
-uint32_t *txBuf = NULL;
-uint32_t *filterList = NULL;
-uint8_t *rxBytes = NULL;
-CANCallback callback = NULL;
+static uint32_t *rxFifo0 = NULL;
+static uint32_t *rxFifo1 = NULL;
+static uint32_t *txBuf = NULL;
+static uint32_t *filterList = NULL;
+static CANCallback callback = NULL;
 
-void CANInit(uint32_t *rxFifo0Start, uint32_t *rxFifo1Start, uint32_t *txBufStart, uint32_t *extendedFilterListStart, uint32_t rxFifo0Count, uint32_t rxFifo1Count, uint32_t txBufCount, uint32_t extendedFilterListCount, uint8_t *buf, CANCallback rxCallback)
+void CANInit(uint32_t *rxFifo0Start, uint32_t *rxFifo1Start, uint32_t *txBufStart, uint32_t *extendedFilterListStart, uint32_t rxFifo0Count, uint32_t rxFifo1Count, uint32_t txBufCount, uint32_t extendedFilterListCount, CANCallback rxCallback)
 {
   // save necessary pointers 
   rxFifo0 = rxFifo0Start;
   rxFifo1 = rxFifo1Start;
   txBuf = txBufStart;
   filterList = extendedFilterListStart;
-  rxBytes = buf;
   callback = rxCallback;
 
   // configure main clock
@@ -50,7 +48,7 @@ void CANInit(uint32_t *rxFifo0Start, uint32_t *rxFifo1Start, uint32_t *txBufStar
   CAN1_REGS->CAN_NBTP = CAN_NBTP_RESETVALUE;
 
   // set global filter configuration
-  CAN1_REGS->CAN_GFC = CAN_GFC_ANFE_REJECT; // reject any non-matching frames
+  CAN1_REGS->CAN_GFC = CAN_GFC_ANFE_RXF1; // reject any non-matching frames
 
   // set extended ID filter configuration
   CAN1_REGS->CAN_XIDFC = CAN_XIDFC_LSE(extendedFilterListCount) | CAN_XIDFC_FLESA(extendedFilterListStart);
@@ -76,7 +74,7 @@ void CANInit(uint32_t *rxFifo0Start, uint32_t *rxFifo1Start, uint32_t *txBufStar
   // configure Rx FIFO 1
   if(rxFifo1Count > 0 && rxFifo1Start != NULL)
   {
-    CAN1_REGS->CAN_RXF1C = CAN_RXF1C_F1S(rxFifo1Count) | CAN_RXF1C_F1SA(rxFifo1Start);
+    CAN1_REGS->CAN_RXF1C = CAN_RXF1C_F1S(rxFifo1Count) | CAN_RXF1C_F1SA(rxFifo1Start) | CAN_RXF1C_F1OM_Msk;
   
     // configure Rx FIFO 1 element size
     CAN1_REGS->CAN_RXESC |= CAN_RXESC_F1DS_DATA8;
@@ -115,64 +113,74 @@ void CANSend(uint8_t index)
   CAN1_REGS->CAN_TXBAR = (1 << index);
 }
 
-void CAN1_Handler()
+bool CANReceive(uint8_t fifoIndex, CANMessage *messageBuf)
 {
-  if((CAN1_REGS->CAN_IR & CAN_IR_RF0N_Msk) != 0 || (CAN1_REGS->CAN_IR & CAN_IR_RF1N_Msk) != 0)
+  bool result = true;
+
+  if((fifoIndex == 0 || fifoIndex == 1) && messageBuf != NULL)
   {
     uint32_t *wordPointer = NULL;
-
-    if((CAN1_REGS->CAN_IR & CAN_IR_RF0N_Msk) != 0)
+    
+    if(fifoIndex == 0 && (CAN1_REGS->CAN_RXF0S & CAN_RXF0S_F0FL_Msk) > 0)
     {
-      // clear interrupt
-      CAN1_REGS->CAN_IR = CAN_IR_RF0N_Msk;
-  
       // get the index of the next element to receive
       uint32_t getIndex = (CAN1_REGS->CAN_RXF0S & CAN_RXF0S_F0GI_Msk) >> 8;
       
       // set acknowledge of receive
       CAN1_REGS->CAN_RXF0A = getIndex;
-    
+      
       // get pointer to FIFO element 
       wordPointer = &rxFifo0[getIndex * RX_FIFO_ELEMENT_WORDS];
     }
-    else if((CAN1_REGS->CAN_IR & CAN_IR_RF1N_Msk) != 0)
+    else if(fifoIndex == 1 && (CAN1_REGS->CAN_RXF1S & CAN_RXF1S_F1FL_Msk) > 0)
     {
-      // clear interrupt
-      CAN1_REGS->CAN_IR = CAN_IR_RF1N_Msk;
-  
       // get the index of the next element to receive
       uint32_t getIndex = (CAN1_REGS->CAN_RXF1S & CAN_RXF1S_F1GI_Msk) >> 8;
       
       // set acknowledge of receive
       CAN1_REGS->CAN_RXF1A = getIndex;
-    
+      
       // get pointer to FIFO element 
       wordPointer = &rxFifo1[getIndex * RX_FIFO_ELEMENT_WORDS];
     }
-
-    // get message type (from ID)
-    uint32_t id = wordPointer[0] & 0x1FFFFFFF;
-
-    // mask out data length
-    uint8_t dlc = (uint8_t)((wordPointer[1] & 0xF0000) >> 0x10);
-
-    // get pointer to data section
-    uint8_t *dataPointer = (uint8_t *)(&wordPointer[2]);
-    
-    // wipe data from last receive to avoid data leakage
-    for(int i=0; i<CAN_MESSAGE_SIZE; i++)
+    else
     {
-      rxBytes[i] = 0;
+      result = false;
     }
     
-    // copy data section to receive buffer
-    for(int i=0; i<dlc; i++)
+    if(result)
     {
-      rxBytes[i] = dataPointer[i];
+      // get message type (from ID)
+      *((uint32_t *)messageBuf->id) = wordPointer[0] & 0x1FFFFFFF;
+  
+      // mask out data length
+      messageBuf->len = (uint8_t)((wordPointer[1] & 0xF0000) >> 0x10);
+      
+      // get pointer to data section
+      uint8_t *dataPointer = (uint8_t *)(&wordPointer[2]);
+      
+      // copy data section to receive buffer
+      for(int i=0; i<messageBuf->len; i++)
+      {
+        messageBuf->data[i] = dataPointer[i];
+      }
     }
-    
-    // invoke callback and pass data length
-    callback(dlc, id);
+  }
+
+  return result;
+}
+  
+void CAN1_Handler()
+{
+  if((CAN1_REGS->CAN_IR & CAN_IR_RF0N_Msk) != 0)
+  {
+    CAN1_REGS->CAN_IR = CAN_IR_RF0N_Msk;
+    callback(0);
+  }
+  else if((CAN1_REGS->CAN_IR & CAN_IR_RF1N_Msk) != 0)
+  {
+    CAN1_REGS->CAN_IR = CAN_IR_RF1N_Msk;
+    callback(1);
   }
 }
 

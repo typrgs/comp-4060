@@ -6,20 +6,23 @@
 #include "trng.h"
 
 #define EXTENDED_FILTER_COUNT NUM_MSG_TYPES
-#define RX_FIFO_ELEMENT_COUNT 10
+#define RX_FIFO_ELEMENT_COUNT 20
 #define TX_BUF_ELEMENT_COUNT NUM_MSG_TYPES
 
 // setup message RAM for CAN
 #define EXTENDED_FILTER_SIZE EXTENDED_FILTER_COUNT * EXTENDED_FILTER_WORDS
 #define RX_FIFO_SIZE RX_FIFO_ELEMENT_COUNT * RX_FIFO_ELEMENT_WORDS
 #define TX_BUF_SIZE TX_BUF_ELEMENT_COUNT * TX_BUF_ELEMENT_WORDS
-static uint32_t messageRAM[EXTENDED_FILTER_SIZE + RX_FIFO_SIZE + TX_BUF_SIZE] __ALIGNED(32);
+static uint32_t messageRAM[EXTENDED_FILTER_SIZE + RX_FIFO_SIZE + RX_FIFO_SIZE + TX_BUF_SIZE] __ALIGNED(32);
 
 // setup start locations of necessary structures
 static uint32_t *extendedFilterStart = (uint32_t *)&(messageRAM[0]);
-static uint32_t *rxFifoStart = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE]);
-static uint32_t *txBufStart = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE + RX_FIFO_SIZE]);
-static uint8_t rxBuf[CAN_MESSAGE_SIZE];
+static uint32_t *rxFifo0Start = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE]);
+static uint32_t *rxFifo1Start = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE + RX_FIFO_SIZE]);
+static uint32_t *txBufStart = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE + RX_FIFO_SIZE + RX_FIFO_SIZE]);
+
+static uint8_t fifo0Count = 0;
+static uint8_t fifo1Count = 0;
 
 #define BLINK_RATE 500 // ms
 #define PULSE_RATE 5000 // ms
@@ -50,7 +53,6 @@ static uint8_t chainPartnerID = 0;
 
 static uint8_t partialBlock[sizeof(Block)];
 static uint8_t partialBlockPos = 0;
-static bool blockAdded = false;
 static uint32_t blockBytesPos = 0;
 
 static Block newBlock = {0};
@@ -165,10 +167,33 @@ static void printBlock(Block block)
   dbg_write_char('\n');
 }
 
+static void printChain()
+{
+  for(int i=0; i<height; i++)
+  {
+    printBlock(blockchain[i]);
+  }
+}
+
+static void printRejected()
+{
+  CANMessage message = {0};
+  CANReceive(1, &message);
+
+  dbg_write_str("Rejected: ");
+  dbg_write_u8(message.id, 4);
+  dbg_write_str(" Type filter: ");
+  dbg_write_u8(filters[message.id[ID_MSG_TYPE_Pos]].id, 4);
+  dbg_write_char('\n');
+
+  fifo1Count--;
+}
+
 static bool verifyBlock(Block toVerify)
 {
   if(findBlock(toVerify))
   {
+    dbg_write_str("Block already exists\n");
     return false;
   }
   else if(height == 0 && (toVerify.nonce != UINT32_MAX || toVerify.transaction.amt != 0 || toVerify.transaction.srcID != 0 || toVerify.transaction.destID != 0))
@@ -188,6 +213,7 @@ static bool verifyBlock(Block toVerify)
     {
       if(toVerify.prevHash[i] != prevHash[i])
       {
+        dbg_write_str("Prev hash does not match\n");
         return false;
       }
     }
@@ -219,10 +245,8 @@ static bool storePartialBlock(uint8_t *rxBuf, uint8_t len)
         dbg_write_str("New block added ");
         printBlock(tempBlock);
 
-        blockAdded = true;
         blockchain[height++] = tempBlock;
       }
-      else dbg_write_str("Block failed to verify\n");
       
       // reset partial block buffer
       for(int i=0; i<sizeof(Block); i++)
@@ -291,11 +315,12 @@ static uint8_t removeFromArray(uint8_t *arr, uint8_t size, uint8_t element)
     if(arr[i] == element) pos = i;
   }
 
-  if(pos > 0)
+  if(pos >= 0)
   {
     for(uint8_t i=pos; i<size-1; i++)
     {
       arr[i] = arr[i+1];
+      arr[i+1] = 0;
     }
 
     newSize--;
@@ -321,57 +346,8 @@ static void peerCheck(uint32_t *activePeers)
   }
 }
 
-static void discover()
-{
-  discoverySuccess = false;
-  chainPartnerID = 0;
-  doingDiscovery = true;
-  uint32_t now;
-
-  // keep trying to discover until we successfully get a valid chain
-  while(!discoverySuccess)
-  {
-    updateFilter(DISCOVER, BROADCAST_ID, myID, SHARE, STF0M);
-    updateTxBuf(DISCOVER, BROADCAST_ID, BROADCAST_ID, NONE, 1, &myID);
-
-    // keep sending discovery requests until we get a response from a peer
-    while(!longestChainPeerID)
-    {
-      // ask everyone on network for their chain heights and IDs
-      CANSend(DISCOVER);
-  
-      // wait a bit to get responses
-      now = elapsedMS();
-      while(!longestChainPeerID && (elapsedMS() - now < DISCOVERY_TIMEOUT));
-    }
-
-    dbg_write_u16(&longestChainHeight, 1);
-    dbg_write_u8(&longestChainPeerID, 1);
-
-    // ask last peer that responded with the longest chain for their blockchain
-    updateFilter(CHAIN, longestChainPeerID, myID, ACK, STF0M);
-    updateTxBuf(CHAIN, BROADCAST_ID, longestChainPeerID, NONE, 1, &myID);
-    
-    // keep sending the chain request, since they may not be ready to share with us if they are currently sharing with another peer
-    while(!chainPartnerID)
-    {
-      CANSend(CHAIN);
-
-      now = elapsedMS();
-      while(!chainPartnerID && (elapsedMS() - now < DISCOVERY_TIMEOUT));
-    }
-
-    // wait in this loop while receving the chain from our partner peer.
-    while(doingDiscovery);
-  }
-
-  resetFilters();
-}
-
 static void sendNewestBlock()
 {
-  while(chainPartnerID);
-
   // build new block
   newBlock = blockchain[height-1];
 
@@ -396,15 +372,8 @@ static void sendNewestBlock()
     // send request
     updateFilter(NEW_TX, sentPeer, myID, SHARE, STF0M);
     updateTxBuf(NEW_RX, BROADCAST_ID, sentPeer, NONE, 1, &myID);
-    
-    while(!newBlockTxPartnerID)
-    {
-      dbg_write_str("Sending new block receive request\n");
-      CANSend(NEW_RX);
 
-      uint32_t now = elapsedMS();
-      while(!newBlockTxPartnerID && (elapsedMS() - now < 1000));
-    }
+    CANSend(NEW_RX);
   }
 }
 
@@ -422,7 +391,7 @@ static void rxPulse(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
 static void rxDiscover(uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
 {
   // someone is joining the network and they want to find out the longest chain
-  if(!doingDiscovery && header == NONE)
+  if(!doingDiscovery && !chainPartnerID && header == NONE)
   {
     dbg_write_str("Received discovery request\n");
 
@@ -508,7 +477,6 @@ static void rxChain(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
     // we successfully receive the data into a partial block buffer, so we can send a request for the next set of bytes
     else if(storePartialBlock(rxBuf, len))
     {
-      blockAdded = false;
       updateTxBuf(CHAIN, myID, chainPartnerID, SHARE, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
       CANSend(CHAIN);
     }
@@ -568,12 +536,15 @@ static void rxNewRx(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
       dbg_write_str("Completed new block receive, height ");
       dbg_write_u16(&height, 1);
       dbg_write_char('\n');
+      printChain();
 
-      resetFilters();
-      
       blockBytesPos = 0;
       partialBlockPos = 0;
       newBlockRxPartnerID = 0;
+      resetFilters();
+      
+      // propagate the new block
+      sendNewestBlock();
     }
     // we successfully receive the data into a partial block buffer, so we can send a request for the next set of bytes
     else if(storePartialBlock(rxBuf, len))
@@ -585,6 +556,7 @@ static void rxNewRx(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
     // the block we received didn't validate properly, so just don't accept it
     else
     {
+      dbg_write_str("New block error\n");
       newBlockRxPartnerID = 0;
       blockBytesPos = 0;
       partialBlockPos = 0;
@@ -598,12 +570,12 @@ static void rxNewTx(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
   if(header == SHARE)
   {
     newBlockTxPartnerID = senderID;
-    
+
     dbg_write_str("Sending partial block to ");
     dbg_write_u8(&senderID, 1);
     dbg_write_char('\n');
 
-    if(sendBlock(1, (uint8_t *)&newBlock, *(uint32_t *)rxBuf, NEW_RX, myID, newBlockTxPartnerID))
+    if(sendBlock(1, (uint8_t *)&newBlock, *(uint32_t *)rxBuf, NEW_RX, myID, senderID))
     {
       dbg_write_str("Full block sent\n");
 
@@ -613,17 +585,94 @@ static void rxNewTx(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
   }
 }
 
-static void rxCallback(uint8_t len, uint32_t id)
+static void canCallback(uint8_t fifoIndex)
 {
-  uint8_t *idAsBytes = (uint8_t *)&id;
-  MsgType type = idAsBytes[ID_MSG_TYPE_Pos];
-  uint8_t senderID = idAsBytes[ID_SENDER_Pos];
-  uint8_t receiverID = idAsBytes[ID_RECEIVER_Pos];
-  HeaderType header = idAsBytes[ID_HEADER_Pos] & 0x1F;
+  if(fifoIndex == 0)
+  {
+    fifo0Count++;
+  }
+  else
+  {
+    fifo1Count++;
+  }
+}
 
-  static void (*rxTypes[])(uint8_t, uint8_t, HeaderType, uint8_t *, uint8_t) = {rxPulse, rxDiscover, rxChain, rxNewRx, rxNewTx};
 
-  rxTypes[type](senderID, receiverID, header, rxBuf, len);
+static void processMessage()
+{
+  CANMessage message = {0};
+  bool hasMessage = CANReceive(0, &message);
+
+  if(hasMessage)
+  {
+    // parse ID into separate fields
+    MsgType type = message.id[ID_MSG_TYPE_Pos];
+    uint8_t senderID = message.id[ID_SENDER_Pos];
+    uint8_t receiverID = message.id[ID_RECEIVER_Pos];
+    HeaderType header = message.id[ID_HEADER_Pos] & 0x1F;
+  
+    static void (*rxTypes[])(uint8_t, uint8_t, HeaderType, uint8_t *, uint8_t) = {rxPulse, rxDiscover, rxChain, rxNewRx, rxNewTx};
+  
+    rxTypes[type](senderID, receiverID, header, message.data, message.len);
+  
+    fifo0Count--;
+  }
+}
+
+static void discover()
+{
+  discoverySuccess = false;
+  chainPartnerID = 0;
+  doingDiscovery = true;
+  uint32_t now;
+
+  // keep trying to discover until we successfully get a valid chain
+  while(!discoverySuccess)
+  {
+    updateFilter(DISCOVER, BROADCAST_ID, myID, SHARE, STF0M);
+    updateTxBuf(DISCOVER, BROADCAST_ID, BROADCAST_ID, NONE, 1, &myID);
+
+    // keep sending discovery requests until we get a response from a peer
+    while(!longestChainPeerID)
+    {
+      // ask everyone on network for their chain heights and IDs
+      CANSend(DISCOVER);
+  
+      // wait a bit to get responses
+      now = elapsedMS();
+      while(!longestChainPeerID && (elapsedMS() - now < DISCOVERY_TIMEOUT))
+      {
+        processMessage();
+      }
+    }
+
+    dbg_write_u16(&longestChainHeight, 1);
+    dbg_write_u8(&longestChainPeerID, 1);
+
+    // ask last peer that responded with the longest chain for their blockchain
+    updateFilter(CHAIN, longestChainPeerID, myID, ACK, STF0M);
+    updateTxBuf(CHAIN, BROADCAST_ID, longestChainPeerID, NONE, 1, &myID);
+    
+    // keep sending the chain request, since they may not be ready to share with us if they are currently sharing with another peer
+    while(!chainPartnerID)
+    {
+      CANSend(CHAIN);
+
+      now = elapsedMS();
+      while(!chainPartnerID && (elapsedMS() - now < DISCOVERY_TIMEOUT))
+      {
+        processMessage();
+      }
+    }
+
+    // wait in this loop while receving the chain from our partner peer.
+    while(doingDiscovery)
+    {
+      processMessage();
+    }
+  }
+
+  resetFilters();
 }
 
 
@@ -655,7 +704,7 @@ static void startup()
   }
   
   icmInit();
-  CANInit(rxFifoStart, NULL, txBufStart, extendedFilterStart, RX_FIFO_ELEMENT_COUNT, 0, TX_BUF_ELEMENT_COUNT, EXTENDED_FILTER_COUNT, rxBuf, rxCallback);
+  CANInit(rxFifo0Start, rxFifo1Start, txBufStart, extendedFilterStart, RX_FIFO_ELEMENT_COUNT, RX_FIFO_ELEMENT_COUNT, TX_BUF_ELEMENT_COUNT, EXTENDED_FILTER_COUNT, canCallback);
   heartInit();
   trngInit();
 
@@ -676,9 +725,9 @@ static void startup()
   else
   {
     // start node adds an extra random block to its chain on startup
-    Transaction newTransaction = {trngRandom(100), trngRandom(100), trngRandom(0)};
+    Transaction newTransaction = {99, 99, 9};
     blockchain[height].minerID = myID;
-    blockchain[height].nonce = trngRandom(0);
+    blockchain[height].nonce = 99;
     blockchain[height].height = height;
     blockchain[height].transaction = newTransaction;
     icmSHA256((uint8_t *)&blockchain[0], sizeof(Block), blockchain[1].prevHash);
@@ -709,6 +758,17 @@ int main()
   {
     uint32_t msCount = elapsedMS();
 
+    // process messages until there are no more to be processed
+    while(fifo0Count > 0)
+    {
+      processMessage();
+    }
+
+    // while(fifo1Count > 0)
+    // {
+    //   printRejected();
+    // }
+
     if(msCount >= pulseTimestamp)
     {
       CANSend(PULSE);
@@ -723,9 +783,9 @@ int main()
     {
       if(startNode)
       {
-        Transaction newTransaction = {trngRandom(100), trngRandom(100), trngRandom(0)};
+        Transaction newTransaction = {100, 1, 2};
         blockchain[height].minerID = myID;
-        blockchain[height].nonce = trngRandom(0);
+        blockchain[height].nonce = 3;
         blockchain[height].height = height;
         blockchain[height].transaction = newTransaction;
         icmSHA256((uint8_t *)&blockchain[height-1], sizeof(Block), blockchain[height].prevHash);

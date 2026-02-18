@@ -22,9 +22,10 @@ typedef enum FILTER_CONFIG
 
 typedef enum FILTER_TYPE
 {
-  RANGE,
+  RANGEM,
   DUAL,
   CLASSIC,
+  RANGE,
   NUM_TYPES
 } FilterType;
 
@@ -39,14 +40,22 @@ typedef struct CAN_TX_BUF
 typedef struct CAN_EXT_FILTER
 {
   uint8_t filterIndex;
-  uint8_t id[8];
+  uint8_t id[4];
   FilterConfig config;
   FilterType type;
 } CANExtFilter;
 
-typedef void (*CANCallback)(uint8_t, uint32_t);
+typedef struct CAN_MSG
+{
+  uint8_t id[4];
+  uint8_t len;
+  uint8_t data[CAN_MESSAGE_SIZE];
+} CANMessage;
 
-void CANInit(uint32_t *rxFifo0Start, uint32_t *rxFifo1Start, uint32_t *txBufStart, uint32_t *extendedFilterListStart, uint32_t rxFifo0Count, uint32_t rxFifo1Count, uint32_t txBufCount, uint32_t extendedFilterListCount, uint8_t *buf, CANCallback rxCallback);
+typedef void (*CANCallback)(uint8_t);
+
+void CANInit(uint32_t *rxFifo0Start, uint32_t *rxFifo1Start, uint32_t *txBufStart, uint32_t *extendedFilterListStart, uint32_t rxFifo0Count, uint32_t rxFifo1Count, uint32_t txBufCount, uint32_t extendedFilterListCount, CANCallback rxCallback);
 void CANSend(uint8_t index);
+bool CANReceive(uint8_t fifoIndex, CANMessage *messageBuf);
 void CANUpdateTxBuf(CANTxBuf buf);
 void CANUpdateFilter(CANExtFilter filter);
