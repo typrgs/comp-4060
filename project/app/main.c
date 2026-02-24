@@ -498,8 +498,6 @@ static void rxChain(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
   // our chain is invalid, so we need to discover a new chain
   else if(header == ERROR)
   {
-    chainPartnerID = 0;
-
     // clear out blockchain
     Block empty = {0};
     for(uint16_t i=0; i<BLOCKCHAIN_SIZE; i++)
@@ -507,9 +505,10 @@ static void rxChain(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
       blockchain[i] = empty;
     }
     height = 0;
-
-    // do discovery to get a valid chain
-    discover();
+    
+    chainPartnerID = 0;
+    doingDiscovery = false;
+    discoverySuccess = false;
   }
 }
 
