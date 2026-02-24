@@ -132,9 +132,12 @@ static bool compareBlocks(Block a, Block b)
   if(a.height != b.height) return false;
   if(a.minerID != b.minerID) return false;
   if(a.nonce != b.nonce) return false;
-  if(a.transaction.amt != b.transaction.amt) return false;
   if(a.transaction.srcID != b.transaction.srcID) return false;
-  if(a.transaction.destID != b.transaction.destID) return false;
+  
+  for(uint8_t i=0; i<TRANSACTION_MSG_SIZE; i++)
+  {
+    if(a.transaction.msg[i] != b.transaction.msg[i]) return false;
+  }
   
   for(uint16_t i=0; i<BLOCK_HASH_SIZE; i++)
   {
@@ -160,8 +163,8 @@ static bool findBlock(Block key)
 static void printBlock(Block block)
 {
   dbg_write_u8(&block.transaction.srcID, 1);
-  dbg_write_u8(&block.transaction.destID, 1);
-  dbg_write_u32(&block.transaction.amt, 1);
+  dbg_write_u8(&block.transaction.msgLen, 1);
+  dbg_write_u8((uint8_t *)&block.transaction.msg, block.transaction.msgLen);
   dbg_write_u32(&block.nonce, 1);
   dbg_write_u8(block.prevHash, 3);
   dbg_write_char('\n');
@@ -196,7 +199,7 @@ static bool verifyBlock(Block toVerify)
     dbg_write_str("Block already exists\n");
     return false;
   }
-  else if(height == 0 && (toVerify.nonce != UINT32_MAX || toVerify.transaction.amt != 0 || toVerify.transaction.srcID != 0 || toVerify.transaction.destID != 0))
+  else if(height == 0 && (toVerify.nonce != UINT32_MAX || toVerify.transaction.msgLen != 0 || toVerify.transaction.srcID != 0))
   {
     return false;
   }
@@ -687,9 +690,8 @@ static void startup()
     discoverySuccess = true;
 
     blockchain[0].nonce = UINT32_MAX;
-    blockchain[0].transaction.amt = 0;
     blockchain[0].transaction.srcID = 0;
-    blockchain[0].transaction.destID = 0;
+    blockchain[0].transaction.msgLen = 0;
     height++;
 
     dbg_write_str("Block added ");
@@ -723,8 +725,12 @@ static void startup()
   }
   else
   {
-    // start node adds an extra random block to its chain on startup
-    Transaction newTransaction = {99, 99, 9};
+    // start node adds an extra block to its chain on startup
+    Transaction newTransaction = {
+      99,
+      "Hello world",
+      11
+    };
     blockchain[height].minerID = myID;
     blockchain[height].nonce = 99;
     blockchain[height].height = height;
@@ -782,7 +788,11 @@ int main()
     {
       if(startNode)
       {
-        Transaction newTransaction = {100, 1, 2};
+        Transaction newTransaction = {
+          1,
+          "New transaction",
+          15
+        };
         blockchain[height].minerID = myID;
         blockchain[height].nonce = 3;
         blockchain[height].height = height;
