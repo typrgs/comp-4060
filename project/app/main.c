@@ -21,15 +21,58 @@ static uint32_t *rxFifo0Start = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE]);
 static uint32_t *rxFifo1Start = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE + RX_FIFO_SIZE]);
 static uint32_t *txBufStart = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE + RX_FIFO_SIZE + RX_FIFO_SIZE]);
 
-static uint8_t fifo0Count = 0;
-static uint8_t fifo1Count = 0;
-
 #define BLINK_RATE 500 // ms
 #define PULSE_RATE 5000 // ms
 #define PEER_CHECK_RATE PULSE_RATE * 2 // ms
 #define CONSENSUS_RATE 10000 // ms
 
 #define DISCOVERY_TIMEOUT 1000 // ms
+
+#define HYS_ON_MAX 1
+#define HYS_ON_LIM 1
+#define HYS_OFF_MIN 0
+#define HYS_OFF_LIM 0
+
+#define SW0_SAMPLE_RATE 10 // ms
+
+#define HOLD_MIN_TIME 250 // ms
+#define TX_TIMEOUT 1000 // ms
+
+// struct for hysteresis recording and event processing
+typedef struct HYS_OBJ
+{
+  uint32_t accumulator;
+  uint32_t lastPress;
+  uint32_t lastRelease;
+  uint8_t state;
+  uint8_t lastState;
+  uint8_t event;
+  uint8_t lastEvent;
+  uint8_t pendingInput;
+} HysObj;
+
+typedef enum TX_STATE
+{
+  TX_IDLE,
+  TX_READ,
+  TX_TRANSMIT,
+  TX_NUM_STATES
+} TxState;
+
+static TxState txIdle();
+static TxState txRead();
+static TxState txTransmit();
+
+static TxState (*txStates[])() = {txIdle, txRead, txTransmit}; 
+static TxState currTxState = TX_IDLE;
+
+// hysteresis object for SW0
+static HysObj sw0 = {0};
+static char txBuf[TRANSACTION_MSG_SIZE];
+static uint8_t txBufLen = 0;
+
+static uint8_t fifo0Count = 0;
+static uint8_t fifo1Count = 0;
 
 // store a transmit buffer per message type
 static CANTxBuf txBufs[NUM_MSG_TYPES] = {0};
@@ -351,6 +394,9 @@ static void peerCheck(uint32_t *activePeers)
 
 static void sendNewestBlock()
 {
+  // wait for previous transmit to complete
+  while(newBlockTxPartnerID);
+
   // build new block
   newBlock = blockchain[height-1];
 
@@ -600,6 +646,103 @@ static void canCallback(uint8_t fifoIndex)
 }
 
 
+static void sw0Init()
+{
+  // set pin PA15 as an input
+  // PA15 is the pad for SW0, which is the button on the processor card
+  PORT_REGS->GROUP[0].PORT_DIRCLR = PORT_PA15;
+
+  // enable pull-up resistor
+  PORT_REGS->GROUP[0].PORT_PINCFG[15] |= PORT_PINCFG_PULLEN_Msk;
+  PORT_REGS->GROUP[0].PORT_OUTSET = PORT_PA15;
+
+  // enable input buffer
+  PORT_REGS->GROUP[0].PORT_PINCFG[15] |= PORT_PINCFG_INEN_Msk;
+}
+
+static void sampleButton()
+{
+  uint32_t now = elapsedMS();
+
+  // update last state and reset event
+  uint8_t lastState = sw0.state;
+  sw0.lastEvent = sw0.event;
+  sw0.event = 0;
+  
+  // read and update current state
+  uint8_t input = ((PORT_REGS->GROUP[0].PORT_IN & PORT_PA15) == 0);
+
+  // feed hysteresis
+  if(input && sw0.accumulator < HYS_ON_MAX)
+  {
+    sw0.accumulator++;
+  }
+  else if(!input && sw0.accumulator > HYS_OFF_MIN)
+  {
+    sw0.accumulator--;
+  }
+
+  if(sw0.accumulator >= HYS_ON_LIM)
+  {
+    sw0.state = 1;
+  }
+  else if(sw0.accumulator <= HYS_OFF_LIM)
+  {
+    sw0.state = 0;
+  }
+
+  if(sw0.state != lastState)
+  {
+    if(lastState && !sw0.state)
+    {
+      sw0.lastRelease = now;
+      sw0.pendingInput = 0;
+
+      if(sw0.lastRelease - sw0.lastPress > HOLD_MIN_TIME)
+      {
+        sw0.event = 2;
+      }
+      else
+      {
+        sw0.event = 1;
+      }
+    }
+    else if(!lastState && sw0.state)
+    {
+      sw0.lastPress = now;
+      sw0.pendingInput = 1;
+    }
+  }
+}
+
+
+static void processTxState()
+{
+  currTxState = txStates[currTxState]();
+}
+
+static TxState txIdle()
+{
+  TxState nextState = TX_IDLE;
+
+  return nextState;
+}
+
+static TxState txRead()
+{
+  TxState nextState = TX_READ;
+
+  return nextState;
+}
+
+static TxState txTransmit()
+{
+  TxState nextState = TX_IDLE;
+
+  return nextState;
+}
+
+
 static void processMessage()
 {
   CANMessage message = {0};
@@ -704,6 +847,7 @@ static void startup()
     discoverySuccess = false;
   }
   
+  sw0Init();
   icmInit();
   CANInit(rxFifo0Start, rxFifo1Start, txBufStart, extendedFilterStart, RX_FIFO_ELEMENT_COUNT, RX_FIFO_ELEMENT_COUNT, TX_BUF_ELEMENT_COUNT, EXTENDED_FILTER_COUNT, canCallback);
   heartInit();
@@ -758,6 +902,7 @@ int main()
   uint32_t pulseTimestamp = 0;
   uint32_t peerCheckTimestamp = PEER_CHECK_RATE;
   uint32_t newBlockTimestamp = trngRandom(5001) + 8000;
+  uint32_t sw0SampleTimestamp = 0;
 
   for(;;)
   {
@@ -774,6 +919,11 @@ int main()
     //   printRejected();
     // }
 
+    if(msCount >= sw0SampleTimestamp)
+    {
+      sampleButton();
+      sw0SampleTimestamp = msCount + SW0_SAMPLE_RATE;
+    }
     if(msCount >= pulseTimestamp)
     {
       CANSend(PULSE);
