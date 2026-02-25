@@ -724,7 +724,7 @@ static void sampleButton()
 }
 
 
-static void processTxState()
+static void processTxState(HysObj sw0)
 {
   currTxState = txStates[currTxState](sw0);
 }
@@ -995,7 +995,7 @@ int main()
     }
     if(msCount >= processTxTimestamp)
     {
-      processTxState();
+      processTxState(sw0);
       processTxTimestamp = msCount + PROCESS_TX_RATE;
     }
     if(msCount >= pulseTimestamp)
