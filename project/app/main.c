@@ -4,6 +4,7 @@
 #include "net.h"
 #include "blockchain.h"
 #include "trng.h"
+#include "morse_map.h"
 
 #define EXTENDED_FILTER_COUNT NUM_MSG_TYPES
 #define RX_FIFO_ELEMENT_COUNT 20
@@ -24,7 +25,6 @@ static uint32_t *txBufStart = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE + RX
 #define BLINK_RATE 500 // ms
 #define PULSE_RATE 5000 // ms
 #define PEER_CHECK_RATE PULSE_RATE * 2 // ms
-#define CONSENSUS_RATE 10000 // ms
 
 #define DISCOVERY_TIMEOUT 1000 // ms
 
@@ -34,9 +34,11 @@ static uint32_t *txBufStart = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE + RX
 #define HYS_OFF_LIM 0
 
 #define SW0_SAMPLE_RATE 10 // ms
+#define PROCESS_TX_RATE 10 // ms
 
 #define HOLD_MIN_TIME 250 // ms
-#define TX_TIMEOUT 1000 // ms
+#define MSG_TIMEOUT 1000 // ms
+#define LETTER_TIMEOUT 400 // ms
 
 // struct for hysteresis recording and event processing
 typedef struct HYS_OBJ
@@ -55,21 +57,27 @@ typedef enum TX_STATE
 {
   TX_IDLE,
   TX_READ,
+  TX_CONVERT,
   TX_TRANSMIT,
   TX_NUM_STATES
 } TxState;
 
-static TxState txIdle();
-static TxState txRead();
-static TxState txTransmit();
+static TxState txIdle(HysObj);
+static TxState txRead(HysObj);
+static TxState txConvert(HysObj);
+static TxState txTransmit(HysObj);
 
-static TxState (*txStates[])() = {txIdle, txRead, txTransmit}; 
+static TxState (*txStates[])(HysObj) = {txIdle, txRead, txConvert, txTransmit}; 
 static TxState currTxState = TX_IDLE;
 
 // hysteresis object for SW0
 static HysObj sw0 = {0};
-static char txBuf[TRANSACTION_MSG_SIZE];
-static uint8_t txBufLen = 0;
+
+// buffers for building transaction messages
+static char txBuf[TRANSACTION_MSG_SIZE] = {0};
+static uint8_t txBufPos = 0;
+static char currBin[MORSE_MAX_LEN + 1] = {0};
+static uint8_t currBinPos = 0;
 
 static uint8_t fifo0Count = 0;
 static uint8_t fifo1Count = 0;
@@ -718,26 +726,104 @@ static void sampleButton()
 
 static void processTxState()
 {
-  currTxState = txStates[currTxState]();
+  currTxState = txStates[currTxState](sw0);
 }
 
-static TxState txIdle()
+static TxState txIdle(HysObj sw0)
 {
   TxState nextState = TX_IDLE;
+
+  if(sw0.pendingInput)
+  {
+    nextState = TX_READ;
+  }
 
   return nextState;
 }
 
-static TxState txRead()
+static TxState txRead(HysObj sw0)
+{
+  TxState nextState = TX_READ;
+  static volatile int msgCount = 0;
+  static volatile int letterCount = 0;
+
+  msgCount++;
+  letterCount++;
+
+  if(msgCount * SW0_SAMPLE_RATE >= MSG_TIMEOUT || txBufPos >= TRANSACTION_MSG_SIZE)
+  {
+    msgCount = 0;
+    nextState = TX_TRANSMIT;
+  }
+  if(letterCount * SW0_SAMPLE_RATE >= LETTER_TIMEOUT || currBinPos >= MORSE_MAX_LEN)
+  {
+    letterCount = 0;
+    currBin[currBinPos] = '\0';
+    currBinPos = 0;
+    nextState = TX_CONVERT;
+  }
+  else if(sw0.pendingInput || sw0.event)
+  {
+    msgCount = 0;
+    letterCount = 0;
+
+    if(!sw0.pendingInput)
+    {
+      if(sw0.event == 2)
+      {
+        currBin[currBinPos] = '-';
+      }
+      else
+      {
+        currBin[currBinPos] = '.';
+      }
+      currBinPos++;
+    }
+  }
+
+  return nextState;
+}
+
+static TxState txConvert(HysObj sw0)
 {
   TxState nextState = TX_READ;
 
+  txBuf[txBufPos] = binToChar(currBin);
+  txBufPos++;
+
+  currBinPos = 0;
+
   return nextState;
 }
 
-static TxState txTransmit()
+static TxState txTransmit(HysObj sw0)
 {
   TxState nextState = TX_IDLE;
+
+  // wait for pending operations
+  while(doingDiscovery || newBlockTxPartnerID || newBlockRxPartnerID);
+
+  // create new transaction and block block
+  Transaction newTransaction = {.srcID = myID, .msgLen = txBufPos};
+  for(int i=0; i<txBufPos; i++)
+  {
+    newTransaction.msg[i] = txBuf[i];
+  }
+
+  blockchain[height].minerID = myID;
+  blockchain[height].nonce = 3;
+  blockchain[height].height = height;
+  blockchain[height].transaction = newTransaction;
+  icmSHA256((uint8_t *)&blockchain[height-1], sizeof(Block), blockchain[height].prevHash);
+  height++;
+
+  dbg_write_str("Mined new block: ");
+  printBlock(blockchain[height-1]);
+
+  // send it out
+  sendNewestBlock();
+
+  txBufPos = 0;
 
   return nextState;
 }
@@ -867,23 +953,6 @@ static void startup()
   {
     discover();
   }
-  else
-  {
-    // start node adds an extra block to its chain on startup
-    Transaction newTransaction = {
-      99,
-      "Hello world",
-      11
-    };
-    blockchain[height].minerID = myID;
-    blockchain[height].nonce = 99;
-    blockchain[height].height = height;
-    blockchain[height].transaction = newTransaction;
-    icmSHA256((uint8_t *)&blockchain[0], sizeof(Block), blockchain[1].prevHash);
-    height++;
-    dbg_write_str("Block added ");
-    printBlock(blockchain[height-1]);
-  }
 }
 
 int main()
@@ -901,8 +970,8 @@ int main()
   uint32_t flashTimestamp = 0;
   uint32_t pulseTimestamp = 0;
   uint32_t peerCheckTimestamp = PEER_CHECK_RATE;
-  uint32_t newBlockTimestamp = trngRandom(5001) + 8000;
   uint32_t sw0SampleTimestamp = 0;
+  uint32_t processTxTimestamp = 0;
 
   for(;;)
   {
@@ -924,6 +993,11 @@ int main()
       sampleButton();
       sw0SampleTimestamp = msCount + SW0_SAMPLE_RATE;
     }
+    if(msCount >= processTxTimestamp)
+    {
+      processTxState();
+      processTxTimestamp = msCount + PROCESS_TX_RATE;
+    }
     if(msCount >= pulseTimestamp)
     {
       CANSend(PULSE);
@@ -933,28 +1007,6 @@ int main()
     {
       peerCheck(activePeers);
       peerCheckTimestamp = msCount + PEER_CHECK_RATE;
-    }
-    if(msCount >= newBlockTimestamp)
-    {
-      if(startNode)
-      {
-        Transaction newTransaction = {
-          1,
-          "New transaction",
-          15
-        };
-        blockchain[height].minerID = myID;
-        blockchain[height].nonce = 3;
-        blockchain[height].height = height;
-        blockchain[height].transaction = newTransaction;
-        icmSHA256((uint8_t *)&blockchain[height-1], sizeof(Block), blockchain[height].prevHash);
-        height++;
-
-        dbg_write_str("Mined new block ");
-        printBlock(blockchain[height-1]);
-        sendNewestBlock();
-      }
-      newBlockTimestamp = msCount + trngRandom(5001) + 8000;
     }
     if(msCount >= flashTimestamp)
     {
