@@ -788,8 +788,13 @@ static TxState txConvert(HysObj sw0)
 {
   TxState nextState = TX_READ;
 
-  txBuf[txBufPos] = binToChar(currBin);
-  txBufPos++;
+  char conversion = binToChar(currBin);
+  
+  if(conversion != '\0')
+  {
+    txBuf[txBufPos] = conversion;
+    txBufPos++;
+  }
 
   currBinPos = 0;
 
