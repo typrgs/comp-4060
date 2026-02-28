@@ -732,10 +732,20 @@ static void processTxState(HysObj sw0)
 static TxState txIdle(HysObj sw0)
 {
   TxState nextState = TX_IDLE;
+  static uint8_t count = 0;
+
+  count++;
+
+  if(count * PROCESS_TX_RATE >= BLINK_RATE)
+  {
+    PORT_REGS->GROUP[0].PORT_OUTTGL = PORT_PA14;
+    count = 0;
+  }
 
   if(sw0.pendingInput)
   {
     nextState = TX_READ;
+    count = 0;
   }
 
   return nextState;
@@ -755,15 +765,20 @@ static TxState txRead(HysObj sw0)
     msgCount = 0;
     nextState = TX_TRANSMIT;
   }
-  if(letterCount * SW0_SAMPLE_RATE >= LETTER_TIMEOUT || currBinPos >= MORSE_MAX_LEN)
+  else if(letterCount * SW0_SAMPLE_RATE >= LETTER_TIMEOUT || currBinPos >= MORSE_MAX_LEN)
   {
     letterCount = 0;
     currBin[currBinPos] = '\0';
     currBinPos = 0;
     nextState = TX_CONVERT;
   }
-  else if(sw0.pendingInput || sw0.event)
+  else if(!sw0.pendingInput && !sw0.event)
   {
+    PORT_REGS->GROUP[0].PORT_OUTSET = PORT_PA14;
+  }
+  else
+  {
+    PORT_REGS->GROUP[0].PORT_OUTCLR = PORT_PA14;
     msgCount = 0;
     letterCount = 0;
 
@@ -806,29 +821,35 @@ static TxState txTransmit(HysObj sw0)
   TxState nextState = TX_IDLE;
 
   // wait for pending operations
-  while(doingDiscovery || newBlockTxPartnerID || newBlockRxPartnerID);
-
-  // create new transaction and block block
-  Transaction newTransaction = {.srcID = myID, .msgLen = txBufPos};
-  for(int i=0; i<txBufPos; i++)
+  if(!doingDiscovery && !newBlockTxPartnerID && !newBlockRxPartnerID)
   {
-    newTransaction.msg[i] = txBuf[i];
+    // create new transaction and block block
+    Transaction newTransaction = {.srcID = myID, .msgLen = txBufPos};
+    for(int i=0; i<txBufPos; i++)
+    {
+      newTransaction.msg[i] = txBuf[i];
+    }
+  
+    blockchain[height].minerID = myID;
+    blockchain[height].nonce = 3;
+    blockchain[height].height = height;
+    blockchain[height].transaction = newTransaction;
+    icmSHA256((uint8_t *)&blockchain[height-1], sizeof(Block), blockchain[height].prevHash);
+    height++;
+  
+    dbg_write_str("Mined new block: ");
+    printBlock(blockchain[height-1]);
+  
+    // send it out
+    sendNewestBlock();
+  
+    txBufPos = 0;
   }
-
-  blockchain[height].minerID = myID;
-  blockchain[height].nonce = 3;
-  blockchain[height].height = height;
-  blockchain[height].transaction = newTransaction;
-  icmSHA256((uint8_t *)&blockchain[height-1], sizeof(Block), blockchain[height].prevHash);
-  height++;
-
-  dbg_write_str("Mined new block: ");
-  printBlock(blockchain[height-1]);
-
-  // send it out
-  sendNewestBlock();
-
-  txBufPos = 0;
+  // stay in the transmit state to avoid reading new morse code messages
+  else
+  {    
+    nextState = TX_TRANSMIT;
+  }
 
   return nextState;
 }
@@ -972,7 +993,6 @@ int main()
   startup();
 
   // timestamps for event scheduling
-  uint32_t flashTimestamp = 0;
   uint32_t pulseTimestamp = 0;
   uint32_t peerCheckTimestamp = PEER_CHECK_RATE;
   uint32_t sw0SampleTimestamp = 0;
@@ -1012,11 +1032,6 @@ int main()
     {
       peerCheck(activePeers);
       peerCheckTimestamp = msCount + PEER_CHECK_RATE;
-    }
-    if(msCount >= flashTimestamp)
-    {
-      PORT_REGS->GROUP[0].PORT_OUTTGL = PORT_PA14;
-      flashTimestamp = msCount + BLINK_RATE;
     }
   }
 
