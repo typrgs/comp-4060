@@ -5,6 +5,8 @@
 #include "blockchain.h"
 #include "trng.h"
 #include "morse_map.h"
+#include "display.h"
+#include "spi.h"
 
 #define EXTENDED_FILTER_COUNT NUM_MSG_TYPES
 #define RX_FIFO_ELEMENT_COUNT 20
@@ -964,6 +966,8 @@ static void startup()
   CANInit(rxFifo0Start, rxFifo1Start, txBufStart, extendedFilterStart, RX_FIFO_ELEMENT_COUNT, RX_FIFO_ELEMENT_COUNT, TX_BUF_ELEMENT_COUNT, EXTENDED_FILTER_COUNT, canCallback);
   heartInit();
   trngInit();
+  spiInit();
+  displayInit();
 
   // setup filters
   resetFilters();
