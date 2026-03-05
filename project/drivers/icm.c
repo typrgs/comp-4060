@@ -2,7 +2,7 @@
 
 static icm_descriptor_registers_t transferDesc __ALIGNED(64) = {0};
 static uint8_t digest[32] __ALIGNED(128); // hash area is 32 bytes to hold a SHA256 digest
-static uint8_t hashData[64]; // data to hash needs to be padded so it is 512 bits long
+static uint8_t hashData[64];              // data to hash needs to be padded so it is 512 bits long
 
 void icmInit()
 {
@@ -31,13 +31,13 @@ static void padMsg(uint8_t *msg, uint64_t msgLen)
   uint8_t hashDataPos = 0;
 
   // reset hash data region
-  for(hashDataPos=0; hashDataPos<64; hashDataPos++)
+  for (hashDataPos = 0; hashDataPos < 64; hashDataPos++)
   {
     hashData[hashDataPos] = 0;
   }
 
   // put the message into the hash data region
-  for(hashDataPos=0; hashDataPos<msgLen; hashDataPos++)
+  for (hashDataPos = 0; hashDataPos < msgLen; hashDataPos++)
   {
     hashData[hashDataPos] = msg[hashDataPos];
   }
@@ -50,9 +50,9 @@ static void padMsg(uint8_t *msg, uint64_t msgLen)
   uint8_t *lenPtr = (uint8_t *)&msgLen;
 
   // place msgLen bytes in big endian order
-  for(int i=7; i>=0; i--)
+  for (int i = 7; i >= 0; i--)
   {
-    hashData[63-i] = lenPtr[i];
+    hashData[63 - i] = lenPtr[i];
   }
 }
 
@@ -60,21 +60,24 @@ void icmSHA256(uint8_t *msg, uint64_t msgLen, uint8_t *result)
 {
   // pad message and place in hash data area
   padMsg(msg, msgLen);
-  
+
   // enable ICM
   ICM_REGS->ICM_CTRL = ICM_CTRL_ENABLE_Msk;
-  while((ICM_REGS->ICM_SR & ICM_SR_ENABLE_Msk) == 0);
+  while ((ICM_REGS->ICM_SR & ICM_SR_ENABLE_Msk) == 0)
+    ;
 
   // wait for hash to finish
-  while((ICM_REGS->ICM_ISR & ICM_ISR_RHC_Msk) == 0);
-  
+  while ((ICM_REGS->ICM_ISR & ICM_ISR_RHC_Msk) == 0)
+    ;
+
   // copy digest to result buffer
-  for(int i=0; i<32; i++)
+  for (int i = 0; i < 32; i++)
   {
     result[i] = digest[i];
   }
 
   // disable ICM
   ICM_REGS->ICM_CTRL = ICM_CTRL_DISABLE_Msk;
-  while((ICM_REGS->ICM_SR & ICM_SR_ENABLE_Msk) != 0);
+  while ((ICM_REGS->ICM_SR & ICM_SR_ENABLE_Msk) != 0)
+    ;
 }

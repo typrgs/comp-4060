@@ -13,9 +13,9 @@
 #define TX_BUF_ELEMENT_COUNT NUM_MSG_TYPES
 
 // setup message RAM for CAN
-#define EXTENDED_FILTER_SIZE EXTENDED_FILTER_COUNT * EXTENDED_FILTER_WORDS
-#define RX_FIFO_SIZE RX_FIFO_ELEMENT_COUNT * RX_FIFO_ELEMENT_WORDS
-#define TX_BUF_SIZE TX_BUF_ELEMENT_COUNT * TX_BUF_ELEMENT_WORDS
+#define EXTENDED_FILTER_SIZE EXTENDED_FILTER_COUNT *EXTENDED_FILTER_WORDS
+#define RX_FIFO_SIZE RX_FIFO_ELEMENT_COUNT *RX_FIFO_ELEMENT_WORDS
+#define TX_BUF_SIZE TX_BUF_ELEMENT_COUNT *TX_BUF_ELEMENT_WORDS
 static uint32_t messageRAM[EXTENDED_FILTER_SIZE + RX_FIFO_SIZE + RX_FIFO_SIZE + TX_BUF_SIZE] __ALIGNED(32);
 
 // setup start locations of necessary structures
@@ -24,9 +24,10 @@ static uint32_t *rxFifo0Start = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE]);
 static uint32_t *rxFifo1Start = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE + RX_FIFO_SIZE]);
 static uint32_t *txBufStart = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE + RX_FIFO_SIZE + RX_FIFO_SIZE]);
 
-#define BLINK_RATE 500 // ms
-#define PULSE_RATE 5000 // ms
+#define BLINK_RATE 500                 // ms
+#define PULSE_RATE 5000                // ms
 #define PEER_CHECK_RATE PULSE_RATE * 2 // ms
+#define DISPLAY_REFRESH_RATE 500       // ms
 
 #define DISCOVERY_TIMEOUT 1000 // ms
 
@@ -38,8 +39,8 @@ static uint32_t *txBufStart = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE + RX
 #define SW0_SAMPLE_RATE 10 // ms
 #define PROCESS_TX_RATE 10 // ms
 
-#define HOLD_MIN_TIME 250 // ms
-#define MSG_TIMEOUT 1000 // ms
+#define HOLD_MIN_TIME 250  // ms
+#define MSG_TIMEOUT 1000   // ms
 #define LETTER_TIMEOUT 400 // ms
 
 // struct for hysteresis recording and event processing
@@ -69,7 +70,7 @@ static TxState txRead(HysObj);
 static TxState txConvert(HysObj);
 static TxState txTransmit(HysObj);
 
-static TxState (*txStates[])(HysObj) = {txIdle, txRead, txConvert, txTransmit}; 
+static TxState (*txStates[])(HysObj) = {txIdle, txRead, txConvert, txTransmit};
 static TxState currTxState = TX_IDLE;
 
 // hysteresis object for SW0
@@ -114,7 +115,6 @@ static uint8_t newBlockTxPartnerID = 0;
 
 static void discover();
 
-
 static void readParams()
 {
   // save device ID given in flash parameters
@@ -122,7 +122,7 @@ static void readParams()
   myID = params[0];
 
   // this parameter indicates whether this node should define the genesis block on startup
-  if(params[1])
+  if (params[1])
   {
     startNode = true;
   }
@@ -136,9 +136,9 @@ static void updateTxBuf(MsgType type, uint8_t senderID, uint8_t receiverID, uint
   txBufs[type].id[ID_RECEIVER_Pos] = receiverID;
   txBufs[type].id[ID_HEADER_Pos] = header;
   txBufs[type].dataLength = dataLength;
-  if(data != NULL)
+  if (data != NULL)
   {
-    for(int i=0; i<dataLength; i++)
+    for (int i = 0; i < dataLength; i++)
     {
       txBufs[type].data[i] = data[i];
     }
@@ -161,7 +161,7 @@ static void updateFilter(MsgType msgType, uint8_t senderID, uint8_t receiverID, 
 
 static void resetFilters()
 {
-  for(uint8_t i=0; i<NUM_MSG_TYPES; i++)
+  for (uint8_t i = 0; i < NUM_MSG_TYPES; i++)
   {
     updateFilter(i, BROADCAST_ID, BROADCAST_ID, NONE, STF0M);
   }
@@ -174,7 +174,7 @@ static void resetTxBufs()
 {
   updateTxBuf(PULSE, BROADCAST_ID, BROADCAST_ID, 0, 1, &myID);
 
-  for(MsgType i=CHAIN; i<NUM_MSG_TYPES; i++)
+  for (MsgType i = CHAIN; i < NUM_MSG_TYPES; i++)
   {
     updateTxBuf(i, myID, BROADCAST_ID, 0, 0, NULL);
   }
@@ -182,19 +182,25 @@ static void resetTxBufs()
 
 static bool compareBlocks(Block a, Block b)
 {
-  if(a.height != b.height) return false;
-  if(a.minerID != b.minerID) return false;
-  if(a.nonce != b.nonce) return false;
-  if(a.transaction.srcID != b.transaction.srcID) return false;
-  
-  for(uint8_t i=0; i<TRANSACTION_MSG_SIZE; i++)
+  if (a.height != b.height)
+    return false;
+  if (a.minerID != b.minerID)
+    return false;
+  if (a.nonce != b.nonce)
+    return false;
+  if (a.transaction.srcID != b.transaction.srcID)
+    return false;
+
+  for (uint8_t i = 0; i < TRANSACTION_MSG_SIZE; i++)
   {
-    if(a.transaction.msg[i] != b.transaction.msg[i]) return false;
+    if (a.transaction.msg[i] != b.transaction.msg[i])
+      return false;
   }
-  
-  for(uint16_t i=0; i<BLOCK_HASH_SIZE; i++)
+
+  for (uint16_t i = 0; i < BLOCK_HASH_SIZE; i++)
   {
-    if(a.prevHash[i] != b.prevHash[i]) return false;
+    if (a.prevHash[i] != b.prevHash[i])
+      return false;
   }
 
   return true;
@@ -202,9 +208,9 @@ static bool compareBlocks(Block a, Block b)
 
 static bool findBlock(Block key)
 {
-  for(uint16_t i=0; i<height; i++)
+  for (uint16_t i = 0; i < height; i++)
   {
-    if(compareBlocks(blockchain[i], key))
+    if (compareBlocks(blockchain[i], key))
     {
       return true;
     }
@@ -225,49 +231,35 @@ static void printBlock(Block block)
 
 static void printChain()
 {
-  for(int i=0; i<height; i++)
+  for (int i = 0; i < height; i++)
   {
     printBlock(blockchain[i]);
   }
 }
 
-static void printRejected()
-{
-  CANMessage message = {0};
-  CANReceive(1, &message);
-
-  dbg_write_str("Rejected: ");
-  dbg_write_u8(message.id, 4);
-  dbg_write_str(" Type filter: ");
-  dbg_write_u8(filters[message.id[ID_MSG_TYPE_Pos]].id, 4);
-  dbg_write_char('\n');
-
-  fifo1Count--;
-}
-
 static bool verifyBlock(Block toVerify)
 {
-  if(findBlock(toVerify))
+  if (findBlock(toVerify))
   {
     dbg_write_str("Block already exists\n");
     return false;
   }
-  else if(height == 0 && (toVerify.nonce != UINT32_MAX || toVerify.transaction.msgLen != 0 || toVerify.transaction.srcID != 0))
+  else if (height == 0 && (toVerify.nonce != UINT32_MAX || toVerify.transaction.msgLen != 0 || toVerify.transaction.srcID != 0))
   {
     return false;
   }
-  else if(height > 0)
+  else if (height > 0)
   {
     // hash current top block for use in comparison
     uint8_t prevHash[BLOCK_HASH_SIZE] = {0};
 
     // msg length is sizeof(Block) * 2 because the length of a hex string needed to represent the size is twice the total amount of bytes
     // (each byte is represented by 8 bits = 2 hex digits)
-    icmSHA256((uint8_t *)&(blockchain[height-1]), sizeof(Block), prevHash);
+    icmSHA256((uint8_t *)&(blockchain[height - 1]), sizeof(Block), prevHash);
 
-    for(int i=0; i<BLOCK_HASH_SIZE; i++)
+    for (int i = 0; i < BLOCK_HASH_SIZE; i++)
     {
-      if(toVerify.prevHash[i] != prevHash[i])
+      if (toVerify.prevHash[i] != prevHash[i])
       {
         dbg_write_str("Prev hash does not match\n");
         return false;
@@ -283,12 +275,12 @@ static bool storePartialBlock(uint8_t *rxBuf, uint8_t len)
   bool result = true;
 
   // build block from received data
-  for(int i=0; i<len; i++)
+  for (int i = 0; i < len; i++)
   {
     partialBlock[partialBlockPos++] = rxBuf[i];
-    
+
     // check if a full block has been constructed
-    if(partialBlockPos == sizeof(Block))
+    if (partialBlockPos == sizeof(Block))
     {
       // add block to chain if verification returns true
       Block tempBlock = *((Block *)partialBlock);
@@ -296,25 +288,25 @@ static bool storePartialBlock(uint8_t *rxBuf, uint8_t len)
       printBlock(tempBlock);
       result = verifyBlock(tempBlock);
 
-      if(result)
+      if (result)
       {
         dbg_write_str("New block added ");
         printBlock(tempBlock);
 
         blockchain[height++] = tempBlock;
       }
-      
+
       // reset partial block buffer
-      for(int i=0; i<sizeof(Block); i++)
+      for (int i = 0; i < sizeof(Block); i++)
       {
         partialBlock[i] = 0;
       }
       partialBlockPos = 0;
     }
-    
+
     blockBytesPos++;
   }
-  
+
   return result;
 }
 
@@ -327,7 +319,7 @@ static bool sendBlock(uint16_t height, uint8_t *blockBytes, uint32_t bytesPos, M
 
   // if there is more data, send out bytes
   // bytes sent is either the full message size, or whatever might be remaining
-  if(bytesUntilEnd > 0)
+  if (bytesUntilEnd > 0)
   {
     uint32_t newBytesPos = bytesPos + (bytesUntilEnd > CAN_MESSAGE_SIZE ? CAN_MESSAGE_SIZE : bytesUntilEnd);
 
@@ -350,9 +342,9 @@ static uint8_t condenseActivePeers(uint32_t *arr, uint8_t *condensedArr)
   uint8_t len = 0;
 
   // squish non-zero arr contents into the start of condensedArr
-  for(uint8_t i=0; i<UINT8_MAX; i++)
+  for (uint8_t i = 0; i < UINT8_MAX; i++)
   {
-    if(activePeers[i])
+    if (activePeers[i])
     {
       condensedArr[len++] = i;
     }
@@ -366,17 +358,18 @@ static uint8_t removeFromArray(uint8_t *arr, uint8_t size, uint8_t element)
   uint8_t newSize = size;
   int pos = -1;
 
-  for(uint8_t i=0; i<size && pos<0; i++)
+  for (uint8_t i = 0; i < size && pos < 0; i++)
   {
-    if(arr[i] == element) pos = i;
+    if (arr[i] == element)
+      pos = i;
   }
 
-  if(pos >= 0)
+  if (pos >= 0)
   {
-    for(uint8_t i=pos; i<size-1; i++)
+    for (uint8_t i = pos; i < size - 1; i++)
     {
-      arr[i] = arr[i+1];
-      arr[i+1] = 0;
+      arr[i] = arr[i + 1];
+      arr[i + 1] = 0;
     }
 
     newSize--;
@@ -389,12 +382,12 @@ static void peerCheck(uint32_t *activePeers)
 {
   uint32_t now = elapsedMS();
 
-  for(uint8_t i=0; i<UINT8_MAX; i++)
+  for (uint8_t i = 0; i < UINT8_MAX; i++)
   {
-    if(activePeers[i])
+    if (activePeers[i])
     {
-      // check if each peer has recently pulsed 
-      if(now - activePeers[i] > PULSE_RATE)
+      // check if each peer has recently pulsed
+      if (now - activePeers[i] > PULSE_RATE)
       {
         activePeers[i] = 0;
       }
@@ -405,10 +398,11 @@ static void peerCheck(uint32_t *activePeers)
 static void sendNewestBlock()
 {
   // wait for previous transmit to complete
-  while(newBlockTxPartnerID);
+  while (newBlockTxPartnerID)
+    ;
 
   // build new block
-  newBlock = blockchain[height-1];
+  newBlock = blockchain[height - 1];
 
   dbg_write_str("New block sent ");
   printBlock(newBlock);
@@ -420,10 +414,10 @@ static void sendNewestBlock()
   // make sure we don't send the block back to whoever we got it from (if we didn't mine it)
   len = removeFromArray(condensedPeers, len, newBlock.minerID);
 
-  if(len > 0)
+  if (len > 0)
   {
     uint8_t sentPeer = condensedPeers[trngRandom(len)];
-  
+
     dbg_write_str("Sent peer is ");
     dbg_write_u8(&sentPeer, 1);
     dbg_write_char('\n');
@@ -435,7 +429,6 @@ static void sendNewestBlock()
     CANSend(NEW_RX);
   }
 }
-
 
 static void rxPulse(uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
 {
@@ -450,7 +443,7 @@ static void rxPulse(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
 static void rxDiscover(uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
 {
   // someone is joining the network and they want to find out the longest chain
-  if(!doingDiscovery && !chainPartnerID && header == NONE)
+  if (!doingDiscovery && !chainPartnerID && header == NONE)
   {
     dbg_write_str("Received discovery request\n");
 
@@ -464,14 +457,14 @@ static void rxDiscover(uint8_t senderID, uint8_t receiverID, HeaderType header, 
     updateTxBuf(DISCOVER, BROADCAST_ID, rxBuf[0], SHARE, sizeof(data), data);
     CANSend(DISCOVER);
   }
-  else if(header == SHARE)
+  else if (header == SHARE)
   {
     // extract data from buffer
     uint8_t peer = rxBuf[0];
     uint16_t receivedHeight = *(uint16_t *)(&rxBuf[1]);
-    
+
     // save the received height if larger than the currently saved value
-    if(receivedHeight >= longestChainHeight)
+    if (receivedHeight >= longestChainHeight)
     {
       longestChainHeight = receivedHeight;
       longestChainPeerID = peer;
@@ -482,7 +475,7 @@ static void rxDiscover(uint8_t senderID, uint8_t receiverID, HeaderType header, 
 static void rxChain(uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
 {
   // receive NONE, respond ACK
-  if(!chainPartnerID && header == NONE)
+  if (!chainPartnerID && header == NONE)
   {
     dbg_write_str("Received chain request\n");
 
@@ -493,7 +486,7 @@ static void rxChain(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
     CANSend(CHAIN);
   }
   // receive ACK, respond SHARE
-  else if(header == ACK)
+  else if (header == ACK)
   {
     dbg_write_str("Discovery handshake completed\n");
 
@@ -504,11 +497,11 @@ static void rxChain(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
     CANSend(CHAIN);
   }
   // receive SHARE, respond BLOCK
-  else if(header == SHARE)
+  else if (header == SHARE)
   {
     dbg_write_str("Received chain block request\n");
 
-    if(sendBlock(height, (uint8_t *)&blockchain, *(uint32_t *)rxBuf, CHAIN, myID, chainPartnerID))
+    if (sendBlock(height, (uint8_t *)&blockchain, *(uint32_t *)rxBuf, CHAIN, myID, chainPartnerID))
     {
       dbg_write_str("Full chain sent\n");
       chainPartnerID = 0;
@@ -516,12 +509,12 @@ static void rxChain(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
     }
   }
   // receive BLOCK, respond SHARE
-  else if(header == BLOCK)
+  else if (header == BLOCK)
   {
     dbg_write_str("Received discovery block\n");
 
     // no more data sent, meaning discovery is done
-    if(len == 0)
+    if (len == 0)
     {
       dbg_write_str("Completed discovery\n");
 
@@ -534,7 +527,7 @@ static void rxChain(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
       resetFilters();
     }
     // we successfully receive the data into a partial block buffer, so we can send a request for the next set of bytes
-    else if(storePartialBlock(rxBuf, len))
+    else if (storePartialBlock(rxBuf, len))
     {
       updateTxBuf(CHAIN, myID, chainPartnerID, SHARE, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
       CANSend(CHAIN);
@@ -555,16 +548,16 @@ static void rxChain(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
     }
   }
   // our chain is invalid, so we need to discover a new chain
-  else if(header == ERROR)
+  else if (header == ERROR)
   {
     // clear out blockchain
     Block empty = {0};
-    for(uint16_t i=0; i<BLOCKCHAIN_SIZE; i++)
+    for (uint16_t i = 0; i < BLOCKCHAIN_SIZE; i++)
     {
       blockchain[i] = empty;
     }
     height = 0;
-    
+
     chainPartnerID = 0;
     doingDiscovery = false;
     discoverySuccess = false;
@@ -573,11 +566,11 @@ static void rxChain(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
 
 static void rxNewRx(uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
 {
-  if(!doingDiscovery && !newBlockRxPartnerID && header == NONE)
+  if (!doingDiscovery && !newBlockRxPartnerID && header == NONE)
   {
     newBlockRxPartnerID = rxBuf[0];
     blockBytesPos = 0;
-    
+
     dbg_write_str("Received new block transmit request from ");
     dbg_write_u8(&newBlockRxPartnerID, 1);
     dbg_write_char('\n');
@@ -586,10 +579,10 @@ static void rxNewRx(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
     updateTxBuf(NEW_TX, myID, newBlockRxPartnerID, SHARE, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
     CANSend(NEW_TX);
   }
-  else if(header == BLOCK)
+  else if (header == BLOCK)
   {
     // no more data sent, meaning block was fully received
-    if(len == 0)
+    if (len == 0)
     {
       dbg_write_str("Completed new block receive, height ");
       dbg_write_u16(&height, 1);
@@ -600,12 +593,12 @@ static void rxNewRx(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
       partialBlockPos = 0;
       newBlockRxPartnerID = 0;
       resetFilters();
-      
+
       // propagate the new block
       sendNewestBlock();
     }
     // we successfully receive the data into a partial block buffer, so we can send a request for the next set of bytes
-    else if(storePartialBlock(rxBuf, len))
+    else if (storePartialBlock(rxBuf, len))
     {
       dbg_write_str("New block bytes stored\n");
       updateTxBuf(NEW_TX, myID, newBlockRxPartnerID, SHARE, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
@@ -625,7 +618,7 @@ static void rxNewRx(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
 
 static void rxNewTx(uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
 {
-  if(header == SHARE)
+  if (header == SHARE)
   {
     newBlockTxPartnerID = senderID;
 
@@ -633,7 +626,7 @@ static void rxNewTx(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
     dbg_write_u8(&senderID, 1);
     dbg_write_char('\n');
 
-    if(sendBlock(1, (uint8_t *)&newBlock, *(uint32_t *)rxBuf, NEW_RX, myID, senderID))
+    if (sendBlock(1, (uint8_t *)&newBlock, *(uint32_t *)rxBuf, NEW_RX, myID, senderID))
     {
       dbg_write_str("Full block sent\n");
 
@@ -645,7 +638,7 @@ static void rxNewTx(uint8_t senderID, uint8_t receiverID, HeaderType header, uin
 
 static void canCallback(uint8_t fifoIndex)
 {
-  if(fifoIndex == 0)
+  if (fifoIndex == 0)
   {
     fifo0Count++;
   }
@@ -654,7 +647,6 @@ static void canCallback(uint8_t fifoIndex)
     fifo1Count++;
   }
 }
-
 
 static void sw0Init()
 {
@@ -678,37 +670,37 @@ static void sampleButton()
   uint8_t lastState = sw0.state;
   sw0.lastEvent = sw0.event;
   sw0.event = 0;
-  
+
   // read and update current state
   uint8_t input = ((PORT_REGS->GROUP[0].PORT_IN & PORT_PA15) == 0);
 
   // feed hysteresis
-  if(input && sw0.accumulator < HYS_ON_MAX)
+  if (input && sw0.accumulator < HYS_ON_MAX)
   {
     sw0.accumulator++;
   }
-  else if(!input && sw0.accumulator > HYS_OFF_MIN)
+  else if (!input && sw0.accumulator > HYS_OFF_MIN)
   {
     sw0.accumulator--;
   }
 
-  if(sw0.accumulator >= HYS_ON_LIM)
+  if (sw0.accumulator >= HYS_ON_LIM)
   {
     sw0.state = 1;
   }
-  else if(sw0.accumulator <= HYS_OFF_LIM)
+  else if (sw0.accumulator <= HYS_OFF_LIM)
   {
     sw0.state = 0;
   }
 
-  if(sw0.state != lastState)
+  if (sw0.state != lastState)
   {
-    if(lastState && !sw0.state)
+    if (lastState && !sw0.state)
     {
       sw0.lastRelease = now;
       sw0.pendingInput = 0;
 
-      if(sw0.lastRelease - sw0.lastPress > HOLD_MIN_TIME)
+      if (sw0.lastRelease - sw0.lastPress > HOLD_MIN_TIME)
       {
         sw0.event = 2;
       }
@@ -717,14 +709,13 @@ static void sampleButton()
         sw0.event = 1;
       }
     }
-    else if(!lastState && sw0.state)
+    else if (!lastState && sw0.state)
     {
       sw0.lastPress = now;
       sw0.pendingInput = 1;
     }
   }
 }
-
 
 static void processTxState(HysObj sw0)
 {
@@ -738,13 +729,13 @@ static TxState txIdle(HysObj sw0)
 
   count++;
 
-  if(count * PROCESS_TX_RATE >= BLINK_RATE)
+  if (count * PROCESS_TX_RATE >= BLINK_RATE)
   {
     PORT_REGS->GROUP[0].PORT_OUTTGL = PORT_PA14;
     count = 0;
   }
 
-  if(sw0.pendingInput)
+  if (sw0.pendingInput)
   {
     nextState = TX_READ;
     count = 0;
@@ -762,19 +753,19 @@ static TxState txRead(HysObj sw0)
   msgCount++;
   letterCount++;
 
-  if(msgCount * SW0_SAMPLE_RATE >= MSG_TIMEOUT || txBufPos >= TRANSACTION_MSG_SIZE)
+  if (msgCount * SW0_SAMPLE_RATE >= MSG_TIMEOUT || txBufPos >= TRANSACTION_MSG_SIZE)
   {
     msgCount = 0;
     nextState = TX_TRANSMIT;
   }
-  else if(letterCount * SW0_SAMPLE_RATE >= LETTER_TIMEOUT || currBinPos >= MORSE_MAX_LEN)
+  else if (letterCount * SW0_SAMPLE_RATE >= LETTER_TIMEOUT || currBinPos >= MORSE_MAX_LEN)
   {
     letterCount = 0;
     currBin[currBinPos] = '\0';
     currBinPos = 0;
     nextState = TX_CONVERT;
   }
-  else if(!sw0.pendingInput && !sw0.event)
+  else if (!sw0.pendingInput && !sw0.event)
   {
     PORT_REGS->GROUP[0].PORT_OUTSET = PORT_PA14;
   }
@@ -784,9 +775,9 @@ static TxState txRead(HysObj sw0)
     msgCount = 0;
     letterCount = 0;
 
-    if(!sw0.pendingInput)
+    if (!sw0.pendingInput)
     {
-      if(sw0.event == 2)
+      if (sw0.event == 2)
       {
         currBin[currBinPos] = '-';
       }
@@ -806,8 +797,8 @@ static TxState txConvert(HysObj sw0)
   TxState nextState = TX_READ;
 
   char conversion = binToChar(currBin);
-  
-  if(conversion != '\0')
+
+  if (conversion != '\0')
   {
     txBuf[txBufPos] = conversion;
     txBufPos++;
@@ -823,57 +814,56 @@ static TxState txTransmit(HysObj sw0)
   TxState nextState = TX_IDLE;
 
   // wait for pending operations
-  if(!doingDiscovery && !newBlockTxPartnerID && !newBlockRxPartnerID)
+  if (!doingDiscovery && !newBlockTxPartnerID && !newBlockRxPartnerID)
   {
     // create new transaction and block block
     Transaction newTransaction = {.srcID = myID, .msgLen = txBufPos};
-    for(int i=0; i<txBufPos; i++)
+    for (int i = 0; i < txBufPos; i++)
     {
       newTransaction.msg[i] = txBuf[i];
     }
-  
+
     blockchain[height].minerID = myID;
     blockchain[height].nonce = 3;
     blockchain[height].height = height;
     blockchain[height].transaction = newTransaction;
-    icmSHA256((uint8_t *)&blockchain[height-1], sizeof(Block), blockchain[height].prevHash);
+    icmSHA256((uint8_t *)&blockchain[height - 1], sizeof(Block), blockchain[height].prevHash);
     height++;
-  
+
     dbg_write_str("Mined new block: ");
-    printBlock(blockchain[height-1]);
-  
+    printBlock(blockchain[height - 1]);
+
     // send it out
     sendNewestBlock();
-  
+
     txBufPos = 0;
   }
   // stay in the transmit state to avoid reading new morse code messages
   else
-  {    
+  {
     nextState = TX_TRANSMIT;
   }
 
   return nextState;
 }
 
-
 static void processMessage()
 {
   CANMessage message = {0};
   bool hasMessage = CANReceive(0, &message);
 
-  if(hasMessage)
+  if (hasMessage)
   {
     // parse ID into separate fields
     MsgType type = message.id[ID_MSG_TYPE_Pos];
     uint8_t senderID = message.id[ID_SENDER_Pos];
     uint8_t receiverID = message.id[ID_RECEIVER_Pos];
     HeaderType header = message.id[ID_HEADER_Pos] & 0x1F;
-  
+
     static void (*rxTypes[])(uint8_t, uint8_t, HeaderType, uint8_t *, uint8_t) = {rxPulse, rxDiscover, rxChain, rxNewRx, rxNewTx};
-  
+
     rxTypes[type](senderID, receiverID, header, message.data, message.len);
-  
+
     fifo0Count--;
   }
 }
@@ -886,20 +876,20 @@ static void discover()
   uint32_t now;
 
   // keep trying to discover until we successfully get a valid chain
-  while(!discoverySuccess)
+  while (!discoverySuccess)
   {
     updateFilter(DISCOVER, BROADCAST_ID, myID, SHARE, STF0M);
     updateTxBuf(DISCOVER, BROADCAST_ID, BROADCAST_ID, NONE, 1, &myID);
 
     // keep sending discovery requests until we get a response from a peer
-    while(!longestChainPeerID)
+    while (!longestChainPeerID)
     {
       // ask everyone on network for their chain heights and IDs
       CANSend(DISCOVER);
-  
+
       // wait a bit to get responses
       now = elapsedMS();
-      while(!longestChainPeerID && (elapsedMS() - now < DISCOVERY_TIMEOUT))
+      while (!longestChainPeerID && (elapsedMS() - now < DISCOVERY_TIMEOUT))
       {
         processMessage();
       }
@@ -911,21 +901,21 @@ static void discover()
     // ask last peer that responded with the longest chain for their blockchain
     updateFilter(CHAIN, longestChainPeerID, myID, ACK, STF0M);
     updateTxBuf(CHAIN, BROADCAST_ID, longestChainPeerID, NONE, 1, &myID);
-    
+
     // keep sending the chain request, since they may not be ready to share with us if they are currently sharing with another peer
-    while(!chainPartnerID)
+    while (!chainPartnerID)
     {
       CANSend(CHAIN);
 
       now = elapsedMS();
-      while(!chainPartnerID && (elapsedMS() - now < DISCOVERY_TIMEOUT))
+      while (!chainPartnerID && (elapsedMS() - now < DISCOVERY_TIMEOUT))
       {
         processMessage();
       }
     }
 
     // wait in this loop while receving the chain from our partner peer.
-    while(doingDiscovery)
+    while (doingDiscovery)
     {
       processMessage();
     }
@@ -935,12 +925,70 @@ static void discover()
 }
 
 
+static uint8_t countDigits(uint16_t number)
+{
+  uint8_t count = 0;
+
+  while(number > 0)
+  {
+    number /= 10;
+    count++;
+  }
+
+  return count;
+}
+
+static void drawNumber(uint16_t number, uint16_t colour, uint8_t row, uint8_t startCol, bool rightAlign)
+{
+  uint8_t len = countDigits(number);
+  uint8_t stack = 0;
+
+  for(uint8_t i=0; i<len; i++)
+  {
+    stack += number % 10;
+    number /= 10;
+    stack *= 10;
+  }
+
+  if(!rightAlign)
+  {
+    for(uint16_t i=startCol; i<startCol+len; i++)
+    {
+      displayDrawFont(row, i, colour, stack % 10);
+      stack /= 10;
+    }
+  }
+  else
+  {
+    for(uint16_t i=startCol; i>startCol-len; i--)
+    {
+      displayDrawFont(row, i, colour, stack % 10);
+      stack /= 10;
+    }
+  }
+}
+
+static void updateDisplay()
+{
+  displayWipe(BLACK);
+
+  int gridRow = 0;
+  int gridCol = 0;
+
+  for(uint16_t i=height-1; i>=0; i++)
+  {
+    Block toPrint = blockchain[i];
+
+    drawNumber(toPrint.transaction.srcID, DARK_BLUE, gridRow, gridCol, false);
+  }
+}
+
 static void startup()
 {
   readParams();
 
   // start node initializes blockchain on startup, all others do consensus on startup
-  if(startNode)
+  if (startNode)
   {
     doingDiscovery = false;
     chainPartnerID = 0;
@@ -952,7 +1000,7 @@ static void startup()
     height++;
 
     dbg_write_str("Block added ");
-    printBlock(blockchain[height-1]);
+    printBlock(blockchain[height - 1]);
   }
   else
   {
@@ -960,7 +1008,7 @@ static void startup()
     chainPartnerID = 0;
     discoverySuccess = false;
   }
-  
+
   sw0Init();
   icmInit();
   CANInit(rxFifo0Start, rxFifo1Start, txBufStart, extendedFilterStart, RX_FIFO_ELEMENT_COUNT, RX_FIFO_ELEMENT_COUNT, TX_BUF_ELEMENT_COUNT, EXTENDED_FILTER_COUNT, canCallback);
@@ -971,15 +1019,15 @@ static void startup()
 
   // setup filters
   resetFilters();
-  
+
   // setup transmit buffers
   resetTxBufs();
-  
+
   // LED output
   PORT_REGS->GROUP[0].PORT_DIRSET = PORT_PA14;
   PORT_REGS->GROUP[0].PORT_OUTSET = PORT_PA14;
-  
-  if(!startNode)
+
+  if (!startNode)
   {
     discover();
   }
@@ -988,7 +1036,8 @@ static void startup()
 int main()
 {
 #ifndef NDEBUG
-  for(int i=0; i<1000000; i++);
+  for (int i = 0; i < 1000000; i++)
+    ;
 #endif
 
   // enable interrupts
@@ -1001,38 +1050,39 @@ int main()
   uint32_t peerCheckTimestamp = PEER_CHECK_RATE;
   uint32_t sw0SampleTimestamp = 0;
   uint32_t processTxTimestamp = 0;
+  uint32_t displayTimestamp = 0;
 
-  for(;;)
+  for (;;)
   {
     uint32_t msCount = elapsedMS();
 
     // process messages until there are no more to be processed
-    while(fifo0Count > 0)
+    while (fifo0Count > 0)
     {
       processMessage();
     }
 
-    // while(fifo1Count > 0)
-    // {
-    //   printRejected();
-    // }
-
-    if(msCount >= sw0SampleTimestamp)
+    if (msCount >= displayTimestamp)
+    {
+      updateDisplay();
+      displayTimestamp = msCount + DISPLAY_REFRESH_RATE;
+    }
+    if (msCount >= sw0SampleTimestamp)
     {
       sampleButton();
       sw0SampleTimestamp = msCount + SW0_SAMPLE_RATE;
     }
-    if(msCount >= processTxTimestamp)
+    if (msCount >= processTxTimestamp)
     {
       processTxState(sw0);
       processTxTimestamp = msCount + PROCESS_TX_RATE;
     }
-    if(msCount >= pulseTimestamp)
+    if (msCount >= pulseTimestamp)
     {
       CANSend(PULSE);
       pulseTimestamp = msCount + PULSE_RATE;
     }
-    if(msCount >= peerCheckTimestamp)
+    if (msCount >= peerCheckTimestamp)
     {
       peerCheck(activePeers);
       peerCheckTimestamp = msCount + PEER_CHECK_RATE;

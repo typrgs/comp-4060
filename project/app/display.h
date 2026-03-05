@@ -26,13 +26,7 @@
 #define GREEN     0x07e0
 #define DARK_GREEN 0x0100
 
-// replace operations assume a draw operation has already occurred
-void displayReplacePixel(uint8_t pixelX, uint8_t pixelY, uint16_t colour);
-
-void displayDrawPixel(uint8_t pixelX, uint8_t pixelY, uint16_t colour);
-
-void displayDrawFont(uint8_t startRow, uint8_t startCol, uint16_t colour, uint8_t number);
-
+void displayDrawFont(uint8_t gridRow, uint8_t gridCol, uint16_t colour, uint8_t number);
 void displayWipe(uint16_t colour);
 void displayInit();
 

@@ -137,7 +137,7 @@ static void deactivate()
   spiDeactivate();
 }
 
-void displayDrawFont(uint8_t startRow, uint8_t startCol, uint16_t colour, uint8_t value)
+void displayDrawFont(uint8_t gridRow, uint8_t gridCol, uint16_t colour, uint8_t value)
 {
   uint8_t currBits;
   uint16_t currPixel;
@@ -156,12 +156,12 @@ void displayDrawFont(uint8_t startRow, uint8_t startCol, uint16_t colour, uint8_
   {
     // set the location of the character on the screen
     displayCmd(DISPLAY_X_ADDR);
-    spiWriteByte(startCol+DISPLAY_X_OFFSET);
-    spiWriteByte(startCol+DISPLAY_X_OFFSET+FONT_COLS);
+    spiWriteByte((gridCol * (FONT_COLS+1))+DISPLAY_X_OFFSET);
+    spiWriteByte((gridCol * (FONT_COLS+1))+DISPLAY_X_OFFSET+FONT_COLS);
 
     displayCmd(DISPLAY_Y_ADDR);
-    spiWriteByte(startRow-row+FONT_SIZE);
-    spiWriteByte(startRow-row+FONT_SIZE);
+    spiWriteByte((gridRow * (FONT_SIZE+1))-row+FONT_SIZE);
+    spiWriteByte((gridRow * (FONT_SIZE+1))-row+FONT_SIZE);
 
     // start write to VRAM 
     displayCmd(DISPLAY_WRITE);
@@ -184,52 +184,6 @@ void displayDrawFont(uint8_t startRow, uint8_t startCol, uint16_t colour, uint8_
 
   // deactive chip select  
   deactivate();
-}
-
-void displayDrawPixel(uint8_t pixelX, uint8_t pixelY, uint16_t colour)
-{
-  // activate chip select
-  activate();
-
-  // now write the new pixel
-  displayCmd(DISPLAY_X_ADDR);
-  spiWriteByte(pixelX+DISPLAY_X_OFFSET);
-  spiWriteByte(pixelX+DISPLAY_X_OFFSET);
-
-  displayCmd(DISPLAY_Y_ADDR);
-  spiWriteByte(pixelY);
-  spiWriteByte(pixelY);
-
-  // start write to VRAM 
-  displayCmd(DISPLAY_WRITE);
-
-  // "activate" pixel
-  spiWriteByte((uint8_t)(colour>>8));
-  spiWriteByte((uint8_t)colour);
-
-  // deactive chip select  
-  deactivate();
-}
-
-void displayReplacePixel(uint8_t pixelX, uint8_t pixelY, uint16_t colour)
-{
-  static bool firstPixel = true;
-  static uint8_t prevX = 0;
-  static uint8_t prevY = 0;
-
-  // erase the previous pixel, if there is one
-  if (!firstPixel)
-  {
-    displayDrawPixel(prevX, prevY, BLACK);
-  }
-  else
-    firstPixel = false;
-
-  displayDrawPixel(pixelX, pixelY, colour);
-
-  // remember where we drew last
-  prevX = pixelX;
-  prevY = pixelY;
 }
 
 void displayWipe(uint16_t colour)
