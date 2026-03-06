@@ -168,6 +168,10 @@ bool CANReceive(uint8_t fifoIndex, CANMessage *messageBuf)
       }
     }
   }
+  else
+  {
+    result = false;
+  }
 
   return result;
 }
