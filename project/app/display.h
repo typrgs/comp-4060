@@ -8,7 +8,11 @@
 
 // all pixel location calculations assume an origin (0,0) at top-left
 
+#define DISPLAY_COLON_INDEX 36
+
 #define DISPLAY_SIZE 96UL
+#define DISPLAY_GRID_MAX_ROW 8
+#define DISPLAY_GRID_MAX_COL 10
 
 #define FONT_SIZE 12
 

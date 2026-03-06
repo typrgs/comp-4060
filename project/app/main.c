@@ -929,7 +929,7 @@ static uint8_t countDigits(uint16_t number)
 {
   uint8_t count = 0;
 
-  while(number > 0)
+  while(number > 0 || count == 0)
   {
     number /= 10;
     count++;
@@ -938,48 +938,60 @@ static uint8_t countDigits(uint16_t number)
   return count;
 }
 
-static void drawNumber(uint16_t number, uint16_t colour, uint8_t row, uint8_t startCol, bool rightAlign)
+static int drawNumber(uint16_t number, uint16_t colour, uint8_t row, uint8_t startCol)
 {
   uint8_t len = countDigits(number);
   uint8_t stack = 0;
 
   for(uint8_t i=0; i<len; i++)
   {
+    stack *= 10;
     stack += number % 10;
     number /= 10;
-    stack *= 10;
   }
 
-  if(!rightAlign)
+  for(uint16_t i=startCol; i<startCol+len; i++)
   {
-    for(uint16_t i=startCol; i<startCol+len; i++)
-    {
-      displayDrawFont(row, i, colour, stack % 10);
-      stack /= 10;
-    }
+    displayDrawFont(row, i, colour, stack % 10);
+    stack /= 10;
   }
-  else
-  {
-    for(uint16_t i=startCol; i>startCol-len; i--)
-    {
-      displayDrawFont(row, i, colour, stack % 10);
-      stack /= 10;
-    }
-  }
+
+  return len;
 }
 
-static void updateDisplay()
+static void updateDisplay(uint16_t fontColour)
 {
-  displayWipe(BLACK);
-
-  int gridRow = 0;
-  int gridCol = 0;
-
-  for(uint16_t i=height-1; i>=0; i++)
+  static uint8_t lastHeight = 0;
+  
+  if(height > lastHeight)
   {
-    Block toPrint = blockchain[i];
+    lastHeight = height;
 
-    drawNumber(toPrint.transaction.srcID, DARK_BLUE, gridRow, gridCol, false);
+    displayWipe(BLACK);
+    
+    int gridRow = 0;
+    int gridCol = 0;
+    for(int i=height-1; i>=0 && gridRow < DISPLAY_GRID_MAX_ROW; i--)
+    {
+      Block toPrint = blockchain[i];
+  
+      gridCol += drawNumber(toPrint.transaction.srcID, fontColour, gridRow, gridCol);
+      displayDrawFont(gridRow, gridCol++, fontColour, DISPLAY_COLON_INDEX);
+
+      for(int j=0; j<toPrint.transaction.msgLen && gridRow < DISPLAY_GRID_MAX_ROW; j++)
+      {
+        displayDrawFont(gridRow, gridCol++, fontColour, toPrint.transaction.msg[j]);
+
+        if(gridCol >= DISPLAY_GRID_MAX_COL)
+        {
+          gridRow++;
+          gridCol = 0;
+        }
+      }
+
+      gridRow++;
+      gridCol = 0;
+    }
   }
 }
 
@@ -996,7 +1008,13 @@ static void startup()
 
     blockchain[0].nonce = UINT32_MAX;
     blockchain[0].transaction.srcID = 0;
-    blockchain[0].transaction.msgLen = 0;
+    blockchain[0].transaction.msgLen = 10;
+    char temp[11] = "HELLOWORLD";
+    for(int i=0; i<10; i++)
+    {
+      blockchain[0].transaction.msg[i] = temp[i];
+    }
+    blockchain[0].transaction.msg[10] = '\0';
     height++;
 
     dbg_write_str("Block added ");
@@ -1064,7 +1082,7 @@ int main()
 
     if (msCount >= displayTimestamp)
     {
-      updateDisplay();
+      updateDisplay(BLUE);
       displayTimestamp = msCount + DISPLAY_REFRESH_RATE;
     }
     if (msCount >= sw0SampleTimestamp)
