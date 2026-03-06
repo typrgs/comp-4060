@@ -21,3 +21,5 @@ typedef struct BLOCK
   uint8_t height;
   uint32_t nonce;
 } Block;
+
+bool verifyNonce(uint32_t nonce);

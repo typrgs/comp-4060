@@ -848,7 +848,11 @@ static TxState txTransmit(HysObj sw0)
     }
 
     blockchain[height].minerID = myID;
-    blockchain[height].nonce = 3;
+    
+    blockchain[height].nonce = trngRandom(0);
+    while(!verifyNonce(blockchain[height].nonce))
+      blockchain[height].nonce = trngRandom(0);
+
     blockchain[height].height = height;
     blockchain[height].transaction = newTransaction;
     icmSHA256((uint8_t *)&blockchain[height - 1], sizeof(Block), blockchain[height].prevHash);
