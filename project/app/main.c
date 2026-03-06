@@ -430,6 +430,8 @@ static void sendNewestBlock()
   }
 }
 
+
+
 static void rxPulse(uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
 {
   dbg_write_str("Pulse from: ");
@@ -648,6 +650,28 @@ static void canCallback(uint8_t fifoIndex)
   }
 }
 
+static void processMessage()
+{
+  CANMessage message = {0};
+  bool hasMessage = CANReceive(0, &message);
+
+  if (hasMessage)
+  {
+    // parse ID into separate fields
+    MsgType type = message.id[ID_MSG_TYPE_Pos];
+    uint8_t senderID = message.id[ID_SENDER_Pos];
+    uint8_t receiverID = message.id[ID_RECEIVER_Pos];
+    HeaderType header = message.id[ID_HEADER_Pos] & 0x1F;
+
+    static void (*rxTypes[])(uint8_t, uint8_t, HeaderType, uint8_t *, uint8_t) = {rxPulse, rxDiscover, rxChain, rxNewRx, rxNewTx};
+
+    rxTypes[type](senderID, receiverID, header, message.data, message.len);
+
+    fifo0Count--;
+  }
+}
+
+
 static void sw0Init()
 {
   // set pin PA15 as an input
@@ -847,26 +871,6 @@ static TxState txTransmit(HysObj sw0)
   return nextState;
 }
 
-static void processMessage()
-{
-  CANMessage message = {0};
-  bool hasMessage = CANReceive(0, &message);
-
-  if (hasMessage)
-  {
-    // parse ID into separate fields
-    MsgType type = message.id[ID_MSG_TYPE_Pos];
-    uint8_t senderID = message.id[ID_SENDER_Pos];
-    uint8_t receiverID = message.id[ID_RECEIVER_Pos];
-    HeaderType header = message.id[ID_HEADER_Pos] & 0x1F;
-
-    static void (*rxTypes[])(uint8_t, uint8_t, HeaderType, uint8_t *, uint8_t) = {rxPulse, rxDiscover, rxChain, rxNewRx, rxNewTx};
-
-    rxTypes[type](senderID, receiverID, header, message.data, message.len);
-
-    fifo0Count--;
-  }
-}
 
 static void discover()
 {
