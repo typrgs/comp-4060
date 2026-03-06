@@ -996,8 +996,11 @@ static void updateDisplay(uint16_t fontColour)
         }
       }
 
-      gridRow++;
-      gridCol = 0;
+      if(gridCol != 0)
+      {
+        gridRow++;
+        gridCol = 0;
+      }
     }
   }
 }
