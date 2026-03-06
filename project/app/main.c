@@ -43,6 +43,8 @@ static uint32_t *txBufStart = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE + RX
 #define MSG_TIMEOUT 1000   // ms
 #define LETTER_TIMEOUT 400 // ms
 
+#define CHAIN_STATE_TIMEOUT 50 // ms
+
 // struct for hysteresis recording and event processing
 typedef struct HYS_OBJ
 {
@@ -549,9 +551,21 @@ static void resetChainState()
 static RxState rxChain(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
 {
   RxState nextState = RX_CHAIN;
+  static uint8_t count = 0;
+
+  count++;
+
+  if(count * PROCESS_SM_RATE >= CHAIN_STATE_TIMEOUT)
+  {
+    dbg_write_str("Exiting chain state on timeout\n");
+    count = 0;
+    nextState = RX_ENTRY;
+  }
 
   if (hasMessage && type == CHAIN)
   {
+    count = 0;
+
     // receive SHARE, respond BLOCK
     if (header == SHARE)
     {
