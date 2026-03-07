@@ -24,12 +24,17 @@ static uint32_t *rxFifo0Start = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE]);
 static uint32_t *rxFifo1Start = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE + RX_FIFO_SIZE]);
 static uint32_t *txBufStart = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE + RX_FIFO_SIZE + RX_FIFO_SIZE]);
 
+#define GENESIS_MSG_LEN 10
+#define GENESIS_SRC_ID 0
+#define GENSIS_NONCE UINT32_MAX
+
 #define BLINK_RATE 500                 // ms
 #define PULSE_RATE 5000                // ms
 #define PEER_CHECK_RATE PULSE_RATE * 2 // ms
 #define DISPLAY_REFRESH_RATE 500       // ms
 
 #define DISCOVERY_TIMEOUT 1000 // ms
+#define CHAIN_TIMEOUT 2000 // ms
 
 #define HYS_ON_MAX 1
 #define HYS_ON_LIM 1
@@ -42,8 +47,6 @@ static uint32_t *txBufStart = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE + RX
 #define HOLD_MIN_TIME 250  // ms
 #define MSG_TIMEOUT 1000   // ms
 #define LETTER_TIMEOUT 400 // ms
-
-#define CHAIN_STATE_TIMEOUT 50 // ms
 
 // struct for hysteresis recording and event processing
 typedef struct HYS_OBJ
@@ -61,9 +64,11 @@ typedef struct HYS_OBJ
 typedef enum RX_STATE
 {
   RX_ENTRY,
+  RX_DISCOVER_SEND,
+  RX_DISCOVER_RECV,
   RX_CHAIN,
-  RX_NEWRX,
-  RX_NEWTX,
+  RX_NEW_RECV,
+  RX_NEW_SEND,
   RX_NUM_STATES
 } RxState;
 
@@ -77,12 +82,14 @@ typedef enum TX_STATE
 } TxState;
 
 static RxState rxEntry(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len);
+static RxState rxDiscoverSend(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len);
+static RxState rxDiscoverRecv(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len);
 static RxState rxChain(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len);
-static RxState rxNewRx(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len);
-static RxState rxNewTx(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len);
+static RxState rxNewRecv(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len);
+static RxState rxNewSend(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len);
 
-static RxState (*rxStates[])(bool, MsgType, uint8_t, uint8_t, HeaderType, uint8_t *, uint8_t) = {rxEntry, rxChain, rxNewRx, rxNewTx};
-static RxState currRxState = RX_ENTRY;
+static RxState (*rxStates[])(bool, MsgType, uint8_t, uint8_t, HeaderType, uint8_t *, uint8_t) = {rxEntry, rxDiscoverSend, rxDiscoverRecv, rxChain, rxNewRecv, rxNewSend};
+static RxState currRxState = RX_DISCOVER_SEND;
 
 static TxState txIdle(HysObj);
 static TxState txRead(HysObj);
@@ -111,6 +118,7 @@ static CANTxBuf txBufs[NUM_MSG_TYPES] = {0};
 static CANExtFilter filters[NUM_MSG_TYPES] = {0};
 
 static bool startNode = false;
+static bool displayAvailable = false;
 
 static uint8_t myID;
 static uint32_t activePeers[UINT8_MAX] = {0};
@@ -131,8 +139,6 @@ static Block newBlock = {0};
 static uint8_t newBlockRxPartnerID = 0;
 static uint8_t newBlockTxPartnerID = 0;
 
-static void discover();
-
 static void readParams()
 {
   // save device ID given in flash parameters
@@ -143,6 +149,10 @@ static void readParams()
   if (params[1])
   {
     startNode = true;
+  }
+  if (params[2])
+  {
+    displayAvailable = true;
   }
 }
 
@@ -262,7 +272,7 @@ static bool verifyBlock(Block toVerify)
     dbg_write_str("Block already exists\n");
     return false;
   }
-  else if (height == 0 && (toVerify.nonce != UINT32_MAX || toVerify.transaction.msgLen != 0 || toVerify.transaction.srcID != 0))
+  else if (height == 0 && (toVerify.nonce != GENSIS_NONCE || toVerify.transaction.msgLen != GENESIS_MSG_LEN || toVerify.transaction.srcID != GENESIS_SRC_ID))
   {
     return false;
   }
@@ -449,34 +459,100 @@ static void sendNewestBlock()
 }
 
 
-static void pulseInitRx(uint8_t *rxBuf)
+static RxState rxEntry(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
 {
-  dbg_write_str("Pulse from: ");
-  dbg_write_u8(rxBuf, 1);
-  dbg_write_char('\n');
+  RxState nextState = RX_ENTRY;
 
-  // mark peer as active
-  activePeers[rxBuf[0]] = elapsedMS();
+  if (hasMessage)
+  {
+    if(type == PULSE)
+    {
+      dbg_write_str("Pulse from: ");
+      dbg_write_u8(rxBuf, 1);
+      dbg_write_char('\n');
+
+      // mark peer as active
+      activePeers[rxBuf[0]] = elapsedMS();
+    }
+    // someone is joining the network and they want to find out the longest chain
+    else if(type == DISCOVER && header == NONE)
+    {
+      dbg_write_str("Received discovery request\n");
+
+      // place ID and height into data buffer
+      uint8_t data[sizeof(height) + sizeof(myID)];
+      data[0] = myID;
+      data[1] = ((uint8_t *)&height)[0];
+      data[2] = ((uint8_t *)&height)[1];
+
+      updateFilter(CHAIN, BROADCAST_ID, myID, NONE, STF0M);
+      updateTxBuf(DISCOVER, BROADCAST_ID, rxBuf[0], SHARE, sizeof(data), data);
+      CANSend(DISCOVER);
+    }
+    // we are either receiving a chain or sending our chain, so change state to block other requests
+    else if(type == CHAIN && header == NONE)
+    { 
+      dbg_write_str("Received chain request\n");
+
+      // save partner ID, get filter ready for chain sharing requests, send chain ack
+      chainPartnerID = rxBuf[0];
+      updateFilter(CHAIN, chainPartnerID, myID, SHARE, STF0M);
+      updateTxBuf(CHAIN, myID, chainPartnerID, ACK, 0, NULL);
+      CANSend(CHAIN);
+
+      nextState = RX_CHAIN;
+    }
+  }
+
+  return nextState;
 }
 
-static void discoverInitRx(HeaderType header, uint8_t *rxBuf)
+static RxState rxDiscoverSend(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
 {
-  if(header == NONE)
+  RxState nextState = RX_DISCOVER_RECV;
+
+  dbg_write_str("Broadcasting discovery request\n");
+  updateFilter(DISCOVER, BROADCAST_ID, myID, SHARE, STF0M);
+  updateTxBuf(DISCOVER, BROADCAST_ID, BROADCAST_ID, NONE, 1, &myID);
+  CANSend(DISCOVER);
+
+  return nextState;
+}
+
+static RxState rxDiscoverRecv(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
+{
+  RxState nextState = RX_DISCOVER_RECV;
+  static uint8_t count = 0;
+
+  count++;
+
+  if(count * PROCESS_SM_RATE >= DISCOVERY_TIMEOUT)
   {
-    dbg_write_str("Received discovery request\n");
-
-    // place ID and height into data buffer
-    uint8_t data[sizeof(height) + sizeof(myID)];
-    data[0] = myID;
-    data[1] = ((uint8_t *)&height)[0];
-    data[2] = ((uint8_t *)&height)[1];
-
-    updateFilter(CHAIN, BROADCAST_ID, myID, NONE, STF0M);
-    updateTxBuf(DISCOVER, BROADCAST_ID, rxBuf[0], SHARE, sizeof(data), data);
-    CANSend(DISCOVER);
+    count = 0;
+    
+    if(longestChainPeerID)
+    {
+      nextState = RX_CHAIN;
+  
+      dbg_write_str("Discover partner data: ");
+      dbg_write_u16(&longestChainHeight, 1);
+      dbg_write_u8(&longestChainPeerID, 1);
+      dbg_write_char('\n');
+  
+      // ask last peer that responded with the longest chain for their blockchain
+      dbg_write_str("Sending chain request\n");
+      updateFilter(CHAIN, longestChainPeerID, myID, ACK, STF0M);
+      updateTxBuf(CHAIN, BROADCAST_ID, longestChainPeerID, NONE, 1, &myID);
+      CANSend(CHAIN);
+    }
+    else
+    {
+      nextState = RX_DISCOVER_SEND;
+    }
   }
-  else if (header == SHARE)
+  else if(hasMessage && type == DISCOVER && header == SHARE)
   {
+    dbg_write_str("Received discovery data\n");
     // extract data from buffer
     uint8_t peer = rxBuf[0];
     uint16_t receivedHeight = *(uint16_t *)(&rxBuf[1]);
@@ -486,54 +562,6 @@ static void discoverInitRx(HeaderType header, uint8_t *rxBuf)
     {
       longestChainHeight = receivedHeight;
       longestChainPeerID = peer;
-    }
-  }
-}
-
-static void chainInitRx(HeaderType header, uint8_t senderID, uint8_t *rxBuf)
-{
-  if(header == NONE)
-  {
-    dbg_write_str("Received chain request\n");
-
-    // save partner ID, get filter ready for chain sharing requests, send chain ack
-    chainPartnerID = rxBuf[0];
-    updateFilter(CHAIN, chainPartnerID, myID, SHARE, STF0M);
-    updateTxBuf(CHAIN, myID, chainPartnerID, ACK, 0, NULL);
-    CANSend(CHAIN);
-  }
-  else if(header == ACK)
-  {
-    dbg_write_str("Discovery handshake completed\n");
-
-    // save partner ID, get filter ready for block responses, and send request for first block
-    chainPartnerID = senderID;
-    updateFilter(CHAIN, chainPartnerID, myID, BLOCK, STF0M);
-    updateTxBuf(CHAIN, myID, chainPartnerID, SHARE, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
-    CANSend(CHAIN);
-  }
-}
-
-static RxState rxEntry(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
-{
-  RxState nextState = RX_ENTRY;
-
-  if (hasMessage)
-  {
-    if(type == PULSE)
-    {
-      pulseInitRx(rxBuf);
-    }
-    // someone is joining the network and they want to find out the longest chain
-    else if(type == DISCOVER)
-    {
-      discoverInitRx(header, rxBuf);
-    }
-    // we are either receiving a chain or sending our chain, so change state to block other requests
-    else if(type == CHAIN)
-    { 
-      nextState = RX_CHAIN;
-      chainInitRx(header, senderID, rxBuf);
     }
   }
 
@@ -555,24 +583,35 @@ static RxState rxChain(bool hasMessage, MsgType type, uint8_t senderID, uint8_t 
 
   count++;
 
-  if(count * PROCESS_SM_RATE >= CHAIN_STATE_TIMEOUT)
+  if (count * PROCESS_SM_RATE >= CHAIN_TIMEOUT)
   {
     dbg_write_str("Exiting chain state on timeout\n");
     count = 0;
     nextState = RX_ENTRY;
   }
-
-  if (hasMessage && type == CHAIN)
+  else if (hasMessage && type == CHAIN)
   {
     count = 0;
 
+    if (header == ACK)
+    {
+      dbg_write_str("Discovery handshake completed\n");
+
+      // save partner ID, get filter ready for block responses, and send request for first block
+      chainPartnerID = senderID;
+      updateFilter(CHAIN, chainPartnerID, myID, BLOCK, STF0M);
+      updateTxBuf(CHAIN, myID, chainPartnerID, SHARE, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
+      CANSend(CHAIN);
+    }
     // receive SHARE, respond BLOCK
-    if (header == SHARE)
+    else if (header == SHARE)
     {
       dbg_write_str("Received chain block request\n");
   
       if (sendBlock(height, (uint8_t *)&blockchain, *(uint32_t *)rxBuf, CHAIN, myID, chainPartnerID))
       {
+        nextState = RX_ENTRY;
+
         dbg_write_str("Full chain sent\n");
         chainPartnerID = 0;
         resetFilters();
@@ -603,10 +642,11 @@ static RxState rxChain(bool hasMessage, MsgType type, uint8_t senderID, uint8_t 
       // the block we received didn't validate properly, so we try discovery again
       else
       {
+        dbg_write_str("Invalid chain\n");
         updateTxBuf(CHAIN, myID, chainPartnerID, ERROR, 0, NULL);
         CANSend(CHAIN);
   
-        nextState = RX_ENTRY;
+        nextState = RX_DISCOVER_SEND;
   
         resetChainState();
         discoverySuccess = false;
@@ -616,7 +656,7 @@ static RxState rxChain(bool hasMessage, MsgType type, uint8_t senderID, uint8_t 
     // our chain is invalid, so we need to discover a new chain
     else if (header == ERROR)
     {
-      nextState = RX_ENTRY;
+      nextState = RX_DISCOVER_SEND;
   
       // clear out blockchain
       Block empty = {0};
@@ -635,7 +675,7 @@ static RxState rxChain(bool hasMessage, MsgType type, uint8_t senderID, uint8_t 
   return nextState;
 }
 
-static RxState rxNewRx(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
+static RxState rxNewRecv(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
 {
   if (!newBlockRxPartnerID && header == NONE)
   {
@@ -687,7 +727,7 @@ static RxState rxNewRx(bool hasMessage, MsgType type, uint8_t senderID, uint8_t 
   }
 }
 
-static RxState rxNewTx(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
+static RxState rxNewSend(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
 {
   if (header == SHARE)
   {
@@ -943,61 +983,6 @@ static TxState txTransmit(HysObj sw0)
 }
 
 
-static void discover()
-{
-  discoverySuccess = false;
-  chainPartnerID = 0;
-  uint32_t now;
-
-  // keep trying to discover until we successfully get a valid chain
-  while (!discoverySuccess)
-  {
-    updateFilter(DISCOVER, BROADCAST_ID, myID, SHARE, STF0M);
-    updateTxBuf(DISCOVER, BROADCAST_ID, BROADCAST_ID, NONE, 1, &myID);
-
-    // keep sending discovery requests until we get a response from a peer
-    while (!longestChainPeerID)
-    {
-      // ask everyone on network for their chain heights and IDs
-      CANSend(DISCOVER);
-
-      // wait a bit to get responses
-      now = elapsedMS();
-      while (!longestChainPeerID && (elapsedMS() - now < DISCOVERY_TIMEOUT))
-      {
-        processRxState();
-      }
-    }
-
-    dbg_write_u16(&longestChainHeight, 1);
-    dbg_write_u8(&longestChainPeerID, 1);
-
-    // ask last peer that responded with the longest chain for their blockchain
-    updateFilter(CHAIN, longestChainPeerID, myID, ACK, STF0M);
-    updateTxBuf(CHAIN, BROADCAST_ID, longestChainPeerID, NONE, 1, &myID);
-
-    // keep sending the chain request, since they may not be ready to share with us if they are currently sharing with another peer
-    while (!chainPartnerID)
-    {
-      CANSend(CHAIN);
-
-      now = elapsedMS();
-      while (!chainPartnerID && (elapsedMS() - now < DISCOVERY_TIMEOUT))
-      {
-        processRxState();
-      }
-    }
-
-    // wait in this loop while receving the chain from our partner peer.
-    while (currRxState == RX_CHAIN)
-    {
-      processRxState();
-    }
-  }
-
-  resetFilters();
-}
-
 static uint8_t countDigits(uint16_t number)
 {
   uint8_t count = 0;
@@ -1081,15 +1066,15 @@ static void startup()
     chainPartnerID = 0;
     discoverySuccess = true;
 
-    blockchain[0].nonce = UINT32_MAX;
-    blockchain[0].transaction.srcID = 0;
-    blockchain[0].transaction.msgLen = 10;
-    char temp[11] = "HELLOWORLD";
-    for (int i = 0; i < 10; i++)
+    blockchain[0].nonce = GENSIS_NONCE;
+    blockchain[0].transaction.srcID = GENESIS_SRC_ID;
+    blockchain[0].transaction.msgLen = GENESIS_MSG_LEN;
+    char temp[GENESIS_MSG_LEN+1] = "HELLOWORLD";
+    for (int i = 0; i < GENESIS_MSG_LEN; i++)
     {
       blockchain[0].transaction.msg[i] = temp[i];
     }
-    blockchain[0].transaction.msg[10] = '\0';
+    blockchain[0].transaction.msg[GENESIS_MSG_LEN] = '\0';
     height++;
 
     dbg_write_str("Block added ");
@@ -1121,7 +1106,11 @@ static void startup()
 
   if (!startNode)
   {
-    discover();
+    currRxState = RX_DISCOVER_SEND;
+  }
+  else
+  {
+    currRxState = RX_ENTRY;
   }
 }
 
@@ -1148,7 +1137,7 @@ int main()
   {
     uint32_t msCount = elapsedMS();
 
-    if (msCount >= displayTimestamp)
+    if (displayAvailable && msCount >= displayTimestamp)
     {
       updateDisplay(BLUE);
       displayTimestamp = msCount + DISPLAY_REFRESH_RATE;
@@ -1161,7 +1150,12 @@ int main()
     if (msCount >= processSmTimestamp)
     {
       processRxState();
-      processTxState(sw0);
+
+      if(discoverySuccess)
+      {
+        processTxState(sw0);
+      }
+      
       processSmTimestamp = msCount + PROCESS_SM_RATE;
     }
     if (msCount >= pulseTimestamp)
