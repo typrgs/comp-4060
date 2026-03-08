@@ -12,18 +12,6 @@
 #define RX_FIFO_ELEMENT_COUNT 20
 #define TX_BUF_ELEMENT_COUNT NUM_MSG_TYPES
 
-// setup message RAM for CAN
-#define EXTENDED_FILTER_SIZE EXTENDED_FILTER_COUNT *EXTENDED_FILTER_WORDS
-#define RX_FIFO_SIZE RX_FIFO_ELEMENT_COUNT *RX_FIFO_ELEMENT_WORDS
-#define TX_BUF_SIZE TX_BUF_ELEMENT_COUNT *TX_BUF_ELEMENT_WORDS
-static uint32_t messageRAM[EXTENDED_FILTER_SIZE + RX_FIFO_SIZE + RX_FIFO_SIZE + TX_BUF_SIZE] __ALIGNED(32);
-
-// setup start locations of necessary structures
-static uint32_t *extendedFilterStart = (uint32_t *)&(messageRAM[0]);
-static uint32_t *rxFifo0Start = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE]);
-static uint32_t *rxFifo1Start = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE + RX_FIFO_SIZE]);
-static uint32_t *txBufStart = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE + RX_FIFO_SIZE + RX_FIFO_SIZE]);
-
 #define BLINK_RATE 500                 // ms
 #define PULSE_RATE 5000                // ms
 #define PEER_CHECK_RATE PULSE_RATE * 2 // ms
@@ -45,6 +33,19 @@ static uint32_t *txBufStart = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE + RX
 #define HOLD_MIN_TIME 250  // ms
 #define MSG_TIMEOUT 1000   // ms
 #define LETTER_TIMEOUT 400 // ms
+
+// setup message RAM for CAN
+#define EXTENDED_FILTER_SIZE EXTENDED_FILTER_COUNT *EXTENDED_FILTER_WORDS
+#define RX_FIFO_SIZE RX_FIFO_ELEMENT_COUNT *RX_FIFO_ELEMENT_WORDS
+#define TX_BUF_SIZE TX_BUF_ELEMENT_COUNT *TX_BUF_ELEMENT_WORDS
+
+static uint32_t messageRAM[EXTENDED_FILTER_SIZE + RX_FIFO_SIZE + RX_FIFO_SIZE + TX_BUF_SIZE] __ALIGNED(32);
+
+// setup start locations of necessary structures
+static uint32_t *extendedFilterStart = (uint32_t *)&(messageRAM[0]);
+static uint32_t *rxFifo0Start = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE]);
+static uint32_t *rxFifo1Start = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE + RX_FIFO_SIZE]);
+static uint32_t *txBufStart = (uint32_t *)&(messageRAM[EXTENDED_FILTER_SIZE + RX_FIFO_SIZE + RX_FIFO_SIZE]);
 
 // struct for hysteresis recording and event processing
 typedef struct HYS_OBJ
@@ -352,10 +353,6 @@ static void peerCheck(uint32_t *activePeers)
 
 static void sendNewestBlock()
 {
-  // wait for previous transmit to complete
-  while (newBlockTxPartnerID)
-    ;
-
   // build new block
   newBlock = blockchain[height - 1];
 
@@ -953,7 +950,7 @@ static TxState txTransmit(HysObj sw0)
   TxState nextState = TX_IDLE;
 
   // wait for pending operations
-  if (currRxState != RX_CHAIN && !newBlockTxPartnerID && !newBlockRxPartnerID)
+  if (currRxState != RX_CHAIN && sendingNewBlock && !newBlockRxPartnerID)
   {
     // create new transaction and block block
     Transaction newTransaction = {.srcID = myID, .msgLen = txBufPos};
