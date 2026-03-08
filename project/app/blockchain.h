@@ -6,6 +6,11 @@
 #define BLOCK_HASH_SIZE 32 // bytes
 #define TRANSACTION_MSG_SIZE 50
 
+#define GENESIS_MSG "HELLOWORLD"
+#define GENESIS_MSG_LEN 10
+#define GENESIS_SRC_ID 0
+#define GENSIS_NONCE UINT32_MAX
+
 typedef struct TRANSACTION
 {
   uint8_t srcID;
@@ -23,3 +28,4 @@ typedef struct BLOCK
 } Block;
 
 bool verifyNonce(uint32_t nonce);
+bool verifyBlock(Block *blockchain, uint16_t height, Block toVerify);

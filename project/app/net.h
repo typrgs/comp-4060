@@ -9,11 +9,11 @@
 
 typedef enum MSG_TYPE
 {
-  PULSE,
-  DISCOVER,
-  CHAIN,
-  NEW_RX,
-  NEW_TX,
+  MSG_PULSE,
+  MSG_DISCOVER,
+  MSG_CHAIN,
+  MSG_NEW_RECV,
+  MSG_NEW_SEND,
   NUM_MSG_TYPES
 } MsgType;
 
