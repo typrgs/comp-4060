@@ -6,30 +6,22 @@
 bool verifyNonce(uint32_t nonce)
 {
   bool result = true;
-  uint8_t zeroes = 0;
 
   if(nonce == 0)
   {
     result = false;
   }
 
-  while(result && nonce > 0 && zeroes != BLOCKCHAIN_DIFFICULTY)
+  for(int i = 0; i < BLOCKCHAIN_DIFFICULTY && result; i++)
   {
-    if(nonce % 10 == 0)
-    {
-      zeroes++;
-    }
-    else
+    if(nonce % 10 != 0)
     {
       result = false;
     }
-
-    nonce /= 10;
-  }
-
-  if(zeroes != BLOCKCHAIN_DIFFICULTY)
-  {
-    result = false;
+    else
+    {
+      nonce /= 10;
+    }
   }
 
   return result;
@@ -76,33 +68,42 @@ static bool findBlock(Block *blockchain, uint16_t height, Block key)
 
 bool verifyBlock(Block *blockchain, uint16_t height, Block toVerify)
 {
+  bool result = true;
+
   if (findBlock(blockchain, height, toVerify))
   {
     dbg_write_str("Block already exists\n");
-    return false;
+    result = false;
   }
   else if (height == 0 && (toVerify.nonce != GENSIS_NONCE || toVerify.transaction.msgLen != GENESIS_MSG_LEN || toVerify.transaction.srcID != GENESIS_SRC_ID))
   {
-    return false;
+    result = false;
   }
   else if (height > 0)
   {
-    // hash current top block for use in comparison
-    uint8_t prevHash[BLOCK_HASH_SIZE] = {0};
-
-    // msg length is sizeof(Block) * 2 because the length of a hex string needed to represent the size is twice the total amount of bytes
-    // (each byte is represented by 8 bits = 2 hex digits)
-    icmSHA256((uint8_t *)&(blockchain[height - 1]), sizeof(Block), prevHash);
-
-    for (int i = 0; i < BLOCK_HASH_SIZE; i++)
+    if (!verifyNonce(toVerify.nonce))
     {
-      if (toVerify.prevHash[i] != prevHash[i])
+      result = false;
+    }
+    else
+    {
+      // hash current top block for use in comparison
+      uint8_t prevHash[BLOCK_HASH_SIZE] = {0};
+  
+      // msg length is sizeof(Block) * 2 because the length of a hex string needed to represent the size is twice the total amount of bytes
+      // (each byte is represented by 8 bits = 2 hex digits)
+      icmSHA256((uint8_t *)&(blockchain[height - 1]), sizeof(Block), prevHash);
+  
+      for (int i = 0; i < BLOCK_HASH_SIZE && result; i++)
       {
-        dbg_write_str("Prev hash does not match\n");
-        return false;
+        if (toVerify.prevHash[i] != prevHash[i])
+        {
+          dbg_write_str("Prev hash does not match\n");
+          result = false;
+        }
       }
     }
   }
 
-  return true;
+  return result;
 }
