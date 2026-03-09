@@ -193,12 +193,12 @@ static void resetFilters()
 
 static void resetTxBufs()
 {
-  updateTxBuf(MSG_PULSE, BROADCAST_ID, BROADCAST_ID, HDR_NONE, 1, &myID);
-
-  for (uint8_t i = MSG_PULSE + 1; i < NUM_MSG_TYPES; i++)
+  for (uint8_t i = 0; i < NUM_MSG_TYPES; i++)
   {
     updateTxBuf(i, myID, BROADCAST_ID, 0, 0, NULL);
   }
+
+  updateTxBuf(MSG_PULSE, BROADCAST_ID, BROADCAST_ID, HDR_NONE, 1, &myID);
 }
 
 static void printBlock(Block block)
@@ -466,7 +466,7 @@ static RxState rxChain(bool hasMessage, MsgType type, uint8_t senderID, uint8_t 
       chainPartnerID = rxBuf[0];
 
       // send entire blockchain
-      sendBlocks(height, (uint8_t *)&blockchain, MSG_CHAIN, myID, chainPartnerID);
+      sendBlocks(height, (uint8_t *)&blockchain, HDR_CHAIN, myID, chainPartnerID);
 
       nextState = RX_ENTRY;
 
