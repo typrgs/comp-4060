@@ -22,7 +22,7 @@
 #define NEW_RECV_TIMEOUT 1000  // ms
 
 #define BLOCK_SEND_DELAY 10     // ms
-#define NEW_BROADCAST_DELAY 100 // ms
+#define PROP_DELAY 50 // ms
 
 #define HYS_ON_MAX 1
 #define HYS_ON_LIM 1
@@ -919,7 +919,7 @@ static PropState propSend(Block newBlock)
 
     // wait a bit before sending block bytes
     uint32_t now = elapsedMS();
-    while (elapsedMS() - now < NEW_BROADCAST_DELAY)
+    while (elapsedMS() - now < PROP_DELAY)
       ;
 
     // send new block to peer
