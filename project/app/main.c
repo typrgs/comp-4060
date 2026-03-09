@@ -12,14 +12,14 @@
 #define RX_FIFO_ELEMENT_COUNT 20
 #define TX_BUF_ELEMENT_COUNT NUM_MSG_TYPES
 
-#define BLINK_RATE 500                 // ms
-#define DISPLAY_REFRESH_RATE 500       // ms
+#define BLINK_RATE 500           // ms
+#define DISPLAY_REFRESH_RATE 500 // ms
 
 #define DISCOVERY_TIMEOUT 1000 // ms
 #define CHAIN_TIMEOUT 2000     // ms
 #define NEW_RECV_TIMEOUT 1000  // ms
 
-#define BLOCK_SEND_DELAY 10    // ms
+#define BLOCK_SEND_DELAY 10     // ms
 #define NEW_BROADCAST_DELAY 100 // ms
 
 #define HYS_ON_MAX 1
@@ -267,15 +267,15 @@ static void sendBlocks(uint16_t height, uint8_t *blockBytes, HeaderType header, 
     // if there is more data, send out bytes
     // bytes sent is either the full message size, or whatever might be remaining
     uint32_t bytesSent = (bytesUntilEnd > CAN_MESSAGE_SIZE ? CAN_MESSAGE_SIZE : bytesUntilEnd);
-    
+
     updateTxBuf(MSG_BLOCK, senderID, receiverID, header, bytesSent, &blockBytes[bytesPos]);
     CANSend(MSG_BLOCK);
 
     bytesPos += bytesSent;
-  
+
     // add small delay to prevent message loss while sending many blocks in a row
     uint32_t now = elapsedMS();
-    while(elapsedMS() - now < BLOCK_SEND_DELAY)
+    while (elapsedMS() - now < BLOCK_SEND_DELAY)
       ;
 
     bytesUntilEnd = (height * sizeof(Block)) - bytesPos;
@@ -298,7 +298,7 @@ static void sendNewestBlock()
 
   // wait a bit before sending block bytes
   uint32_t now = elapsedMS();
-  while(elapsedMS() - now < NEW_BROADCAST_DELAY)
+  while (elapsedMS() - now < NEW_BROADCAST_DELAY)
     ;
 
   sendBlocks(1, (uint8_t *)&newBlock, HDR_NEW, myID, BROADCAST_ID);
@@ -444,16 +444,16 @@ static RxState rxChain(bool hasMessage, MsgType type, uint8_t senderID, uint8_t 
   {
     count = 0;
 
-    if(type == MSG_CHAIN && header == HDR_NONE)
+    if (type == MSG_CHAIN && header == HDR_NONE)
     {
       dbg_write_str("Received chain request, sending blockchain\n");
-  
+
       // save partner ID, get filter ready for chain sharing requests, send chain ack
       chainPartnerID = rxBuf[0];
-      
+
       // send entire blockchain
       sendBlocks(height, (uint8_t *)&blockchain, MSG_CHAIN, myID, chainPartnerID);
-    
+
       nextState = RX_ENTRY;
 
       dbg_write_str("Full chain sent\n");
