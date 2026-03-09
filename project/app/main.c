@@ -20,7 +20,7 @@
 #define NEW_RECV_TIMEOUT 1000  // ms
 
 #define BLOCK_SEND_DELAY 10    // ms
-#define NEW_BROADCAST_DELAY 500 // ms
+#define NEW_BROADCAST_DELAY 100 // ms
 
 #define HYS_ON_MAX 1
 #define HYS_ON_LIM 1
