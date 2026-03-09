@@ -25,13 +25,13 @@ uint16_t tcOvfCount = 0;
 
 typedef enum RX_RESULT
 {
-  NONE,
+  HDR_NONE,
   VALID,
   INVALID,
   NUM_RESULTS
 } RxResult;
 
-volatile RxResult asyncProcessResult = NONE;
+volatile RxResult asyncProcessResult = HDR_NONE;
 
 typedef enum RX_STATE
 {
@@ -419,7 +419,7 @@ RxState rxEnd(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedS
 
 RxResult rxProcessState(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
 {
-  RxResult result = NONE;
+  RxResult result = HDR_NONE;
   RxState nextState = rxStates[rxCurrState](nextByte, buf, bufPos, expectedSize);
 
   // verify the result of processing the state machine
@@ -469,11 +469,11 @@ bool uart485ReceiveBytes(uint8_t * const bytes, uint16_t size, uint16_t timeoutM
 {
   bool result = false;
   
-  RxResult processResult = NONE;
+  RxResult processResult = HDR_NONE;
   uint8_t bytesPos = 0;
   
   // continue processing RX state machine until either a valid or invalid result is given
-  while(processResult == NONE)
+  while(processResult == HDR_NONE)
   {
     // set time variables for measuring timeout
     uint32_t currTime = elapsedMS();

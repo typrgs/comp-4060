@@ -12,17 +12,15 @@ typedef enum MSG_TYPE
   MSG_PULSE,
   MSG_DISCOVER,
   MSG_CHAIN,
-  MSG_NEW_RECV,
-  MSG_NEW_SEND,
+  MSG_NEW,
+  MSG_BLOCK,
   NUM_MSG_TYPES
 } MsgType;
 
 typedef enum HEADER_TYPE
 {
-  NONE,
-  ACK,
-  SHARE,
-  BLOCK,
-  ERROR,
+  HDR_NONE,
+  HDR_CHAIN,
+  HDR_NEW,
   NUM_HEADER_TYPES
 } HeaderType;
