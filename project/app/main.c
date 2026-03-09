@@ -899,7 +899,7 @@ static PropState propSend(Block newBlock)
   {
     count = 0;
     nextState = PROP_IDLE;
-    
+
     newBlockSenderID = 0;
     condensedPeersLen = 0;
 
@@ -912,16 +912,16 @@ static PropState propSend(Block newBlock)
     dbg_write_str("Sending to ");
     dbg_write_u8(&sentPeer, 1);
     dbg_write_char('\n');
-    
+
     // send ready check to peer
     updateTxBuf(MSG_NEW, BROADCAST_ID, sentPeer, HDR_NONE, 1, &myID);
     CANSend(MSG_NEW);
-  
+
     // wait a bit before sending block bytes
     uint32_t now = elapsedMS();
     while (elapsedMS() - now < NEW_BROADCAST_DELAY)
       ;
-  
+
     // send new block to peer
     sendBlocks(1, (uint8_t *)&newBlock, HDR_NEW, myID, sentPeer);
 
