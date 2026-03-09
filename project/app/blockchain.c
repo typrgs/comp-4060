@@ -7,14 +7,14 @@ bool verifyNonce(uint32_t nonce)
 {
   bool result = true;
 
-  if(nonce == 0)
+  if (nonce == 0)
   {
     result = false;
   }
 
-  for(int i = 0; i < BLOCKCHAIN_DIFFICULTY && result; i++)
+  for (int i = 0; i < BLOCKCHAIN_DIFFICULTY && result; i++)
   {
-    if(nonce % 10 != 0)
+    if (nonce % 10 != 0)
     {
       result = false;
     }
@@ -89,11 +89,11 @@ bool verifyBlock(Block *blockchain, uint16_t height, Block toVerify)
     {
       // hash current top block for use in comparison
       uint8_t prevHash[BLOCK_HASH_SIZE] = {0};
-  
+
       // msg length is sizeof(Block) * 2 because the length of a hex string needed to represent the size is twice the total amount of bytes
       // (each byte is represented by 8 bits = 2 hex digits)
       icmSHA256((uint8_t *)&(blockchain[height - 1]), sizeof(Block), prevHash);
-  
+
       for (int i = 0; i < BLOCK_HASH_SIZE && result; i++)
       {
         if (toVerify.prevHash[i] != prevHash[i])
