@@ -81,6 +81,13 @@ typedef enum TX_STATE
   TX_NUM_STATES
 } TxState;
 
+typedef enum PROP_STATE
+{
+  PROP_IDLE,
+  PROP_SEND,
+  NUM_PROP_STATES
+} PropState;
+
 static RxState rxEntry(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len);
 static RxState rxDiscoverSend(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len);
 static RxState rxDiscoverRecv(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len);
@@ -97,6 +104,12 @@ static TxState txTransmit(HysObj);
 
 static TxState (*txStates[])(HysObj) = {txIdle, txRead, txConvert, txTransmit};
 static TxState currTxState = TX_IDLE;
+
+static PropState propIdle(Block newBlock);
+static PropState propSend(Block newBlock);
+
+static PropState (*propStates[])(Block) = {propIdle, propSend};
+static PropState currPropState = PROP_IDLE;
 
 // hysteresis object for SW0
 static HysObj sw0 = {0};
@@ -135,6 +148,9 @@ static uint8_t partialBlockPos = 0;
 static uint32_t blockBytesPos = 0;
 
 static Block newBlock = {0};
+static uint8_t newBlockSenderID = 0;
+static uint8_t condensedPeers[UINT8_MAX] = {0};
+static uint8_t condensedPeersLen = 0;
 
 static void readParams()
 {
@@ -190,6 +206,8 @@ static void resetFilters()
   {
     updateFilter(i, BROADCAST_ID, BROADCAST_ID, HDR_NONE, STF0M);
   }
+
+  updateFilter(MSG_NEW, BROADCAST_ID, myID, HDR_NONE, STF0M);
 }
 
 static void resetTxBufs()
@@ -290,7 +308,7 @@ static void sendBlocks(uint16_t height, uint8_t *blockBytes, HeaderType header, 
   CANSend(MSG_BLOCK);
 }
 
-static void sendNewestBlock()
+static void sendNewestBlock(uint8_t senderID)
 {
   // build new block
   newBlock = blockchain[height - 1];
@@ -298,17 +316,7 @@ static void sendNewestBlock()
   dbg_write_str("Sending new block: ");
   printBlock(newBlock);
 
-  updateTxBuf(MSG_NEW, BROADCAST_ID, BROADCAST_ID, HDR_NONE, 1, &myID);
-  CANSend(MSG_NEW);
-
-  // wait a bit before sending block bytes
-  uint32_t now = elapsedMS();
-  while (elapsedMS() - now < NEW_BROADCAST_DELAY)
-    ;
-
-  sendBlocks(1, (uint8_t *)&newBlock, HDR_NEW, myID, BROADCAST_ID);
-
-  dbg_write_str("New block sent\n");
+  newBlockSenderID = senderID;
 }
 
 static uint8_t condenseActivePeers(uint32_t *arr, uint8_t *condensedArr)
@@ -591,7 +599,7 @@ static RxState rxNewRecv(bool hasMessage, MsgType type, uint8_t senderID, uint8_
       dbg_write_str("Ready to begin receiving new block from ");
       dbg_write_u8(rxBuf, 1);
       dbg_write_char('\n');
-      updateFilter(MSG_BLOCK, rxBuf[0], BROADCAST_ID, HDR_NEW, STF0M);
+      updateFilter(MSG_BLOCK, rxBuf[0], myID, HDR_NEW, STF0M);
     }
     else if (type == MSG_BLOCK && header == HDR_NEW)
     {
@@ -607,6 +615,9 @@ static RxState rxNewRecv(bool hasMessage, MsgType type, uint8_t senderID, uint8_
         nextState = RX_ENTRY;
 
         resetNewRecvState();
+
+        // propagate it
+        sendNewestBlock(senderID);
       }
       else if (!storePartialBlock(rxBuf, len))
       {
@@ -818,7 +829,7 @@ static TxState txTransmit(HysObj sw0)
   TxState nextState = TX_IDLE;
 
   // wait for pending operations
-  if (currRxState != RX_CHAIN)
+  if (!newBlockSenderID)
   {
     // create new transaction and block block
     Transaction newTransaction = {.srcID = myID, .msgLen = txBufPos};
@@ -842,7 +853,7 @@ static TxState txTransmit(HysObj sw0)
     printBlock(blockchain[height - 1]);
 
     // send it out
-    sendNewestBlock();
+    sendNewestBlock(myID);
 
     txBufPos = 0;
   }
@@ -853,6 +864,77 @@ static TxState txTransmit(HysObj sw0)
   }
 
   return nextState;
+}
+
+static PropState propIdle(Block newBlock)
+{
+  PropState nextState = PROP_IDLE;
+
+  if (newBlockSenderID)
+  {
+    nextState = PROP_SEND;
+
+    // setup condensedPeers array
+    condensedPeersLen = condenseActivePeers(activePeers, condensedPeers);
+
+    // remove the miner of the block so they aren't resent it
+    condensedPeersLen = removeFromArray(condensedPeers, condensedPeersLen, newBlock.minerID);
+
+    // remove whoever sent us the block so they aren't resent it
+    if (newBlockSenderID != myID)
+      condensedPeersLen = removeFromArray(condensedPeers, condensedPeersLen, newBlockSenderID);
+  }
+
+  return nextState;
+}
+
+static PropState propSend(Block newBlock)
+{
+  PropState nextState = PROP_SEND;
+  static uint8_t count = 0;
+
+  count++;
+
+  if (count >= PEER_PROPAGATION_COUNT || !newBlockSenderID || condensedPeersLen == 0)
+  {
+    count = 0;
+    nextState = PROP_IDLE;
+    
+    newBlockSenderID = 0;
+    condensedPeersLen = 0;
+
+    dbg_write_str("New block propagated\n");
+  }
+  else if (newBlockSenderID && condensedPeersLen > 0)
+  {
+    uint8_t sentPeer = condensedPeers[trngRandom(condensedPeersLen)];
+
+    dbg_write_str("Sending to ");
+    dbg_write_u8(&sentPeer, 1);
+    dbg_write_char('\n');
+    
+    // send ready check to peer
+    updateTxBuf(MSG_NEW, BROADCAST_ID, sentPeer, HDR_NONE, 1, &myID);
+    CANSend(MSG_NEW);
+  
+    // wait a bit before sending block bytes
+    uint32_t now = elapsedMS();
+    while (elapsedMS() - now < NEW_BROADCAST_DELAY)
+      ;
+  
+    // send new block to peer
+    sendBlocks(1, (uint8_t *)&newBlock, HDR_NEW, myID, sentPeer);
+
+    // remove peer from array to avoid resending on the next state processing call
+    condensedPeersLen = removeFromArray(condensedPeers, condensedPeersLen, sentPeer);
+  }
+
+  return nextState;
+}
+
+static void processPropState(Block newBlock)
+{
+  currPropState = propStates[currPropState](newBlock);
 }
 
 static uint8_t countDigits(uint16_t number)
@@ -1025,6 +1107,7 @@ int main()
       if (discoverySuccess)
       {
         processTxState(sw0);
+        processPropState(newBlock);
       }
 
       processSmTimestamp = msCount + PROCESS_SM_RATE;

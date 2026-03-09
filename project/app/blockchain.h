@@ -11,6 +11,8 @@
 #define GENESIS_SRC_ID 0
 #define GENSIS_NONCE UINT32_MAX
 
+#define PEER_PROPAGATION_COUNT 2
+
 typedef struct TRANSACTION
 {
   uint8_t srcID;
