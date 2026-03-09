@@ -13,16 +13,14 @@
 #define TX_BUF_ELEMENT_COUNT NUM_MSG_TYPES
 
 #define BLINK_RATE 500                 // ms
-#define PULSE_RATE 5000                // ms
-#define PEER_CHECK_RATE PULSE_RATE * 2 // ms
 #define DISPLAY_REFRESH_RATE 500       // ms
 
 #define DISCOVERY_TIMEOUT 1000 // ms
 #define CHAIN_TIMEOUT 2000     // ms
-#define NEW_SEND_TIMEOUT 1000  // ms
 #define NEW_RECV_TIMEOUT 1000  // ms
 
-#define BLOCK_SEND_DELAY 10 // ms
+#define BLOCK_SEND_DELAY 10    // ms
+#define NEW_BROADCAST_DELAY 500 // ms
 
 #define HYS_ON_MAX 1
 #define HYS_ON_LIM 1
@@ -69,7 +67,6 @@ typedef enum RX_STATE
   RX_DISCOVER_RECV,
   RX_CHAIN,
   RX_NEW_RECV,
-  RX_NEW_SEND,
   RX_NUM_STATES
 } RxState;
 
@@ -87,9 +84,8 @@ static RxState rxDiscoverSend(bool hasMessage, MsgType type, uint8_t senderID, u
 static RxState rxDiscoverRecv(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len);
 static RxState rxChain(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len);
 static RxState rxNewRecv(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len);
-static RxState rxNewSend(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len);
 
-static RxState (*rxStates[])(bool, MsgType, uint8_t, uint8_t, HeaderType, uint8_t *, uint8_t) = {rxEntry, rxDiscoverSend, rxDiscoverRecv, rxChain, rxNewRecv, rxNewSend};
+static RxState (*rxStates[])(bool, MsgType, uint8_t, uint8_t, HeaderType, uint8_t *, uint8_t) = {rxEntry, rxDiscoverSend, rxDiscoverRecv, rxChain, rxNewRecv};
 static RxState currRxState = RX_DISCOVER_SEND;
 
 static TxState txIdle(HysObj);
@@ -122,7 +118,6 @@ static bool startNode = false;
 static bool displayAvailable = false;
 
 static uint8_t myID;
-static uint32_t activePeers[UINT8_MAX] = {0};
 
 static Block blockchain[BLOCKCHAIN_SIZE] = {0};
 static uint16_t height = 0;
@@ -137,9 +132,6 @@ static uint8_t partialBlockPos = 0;
 static uint32_t blockBytesPos = 0;
 
 static Block newBlock = {0};
-static uint8_t newBlockRxPartnerID = 0;
-static uint8_t newBlockTxPartnerID = 0;
-static bool sendingNewBlock = false;
 
 static void readParams()
 {
@@ -199,9 +191,7 @@ static void resetFilters()
 
 static void resetTxBufs()
 {
-  updateTxBuf(MSG_PULSE, BROADCAST_ID, BROADCAST_ID, 0, 1, &myID);
-
-  for (MsgType i = MSG_PULSE + 1; i < NUM_MSG_TYPES; i++)
+  for (MsgType i = MSG_DISCOVER + 1; i < NUM_MSG_TYPES; i++)
   {
     updateTxBuf(i, myID, BROADCAST_ID, 0, 0, NULL);
   }
@@ -265,150 +255,64 @@ static bool storePartialBlock(uint8_t *rxBuf, uint8_t len)
   return result;
 }
 
-static uint32_t sendBlock(uint16_t height, uint8_t *blockBytes, uint32_t bytesPos, HeaderType header, uint8_t senderID, uint8_t receiverID)
+static void sendBlocks(uint16_t height, uint8_t *blockBytes, HeaderType header, uint8_t senderID, uint8_t receiverID)
 {
-  uint32_t result = 0;
+  uint32_t bytesPos = 0;
 
   // calculate how many bytes are left until the end of the chain
   uint32_t bytesUntilEnd = (height * sizeof(Block)) - bytesPos;
 
-  // if there is more data, send out bytes
-  // bytes sent is either the full message size, or whatever might be remaining
-  if (bytesUntilEnd > 0)
+  while (bytesUntilEnd > 0)
   {
-    result = (bytesUntilEnd > CAN_MESSAGE_SIZE ? CAN_MESSAGE_SIZE : bytesUntilEnd);
+    // if there is more data, send out bytes
+    // bytes sent is either the full message size, or whatever might be remaining
+    uint32_t bytesSent = (bytesUntilEnd > CAN_MESSAGE_SIZE ? CAN_MESSAGE_SIZE : bytesUntilEnd);
+    
+    updateTxBuf(MSG_BLOCK, senderID, receiverID, header, bytesSent, &blockBytes[bytesPos]);
+    CANSend(MSG_BLOCK);
 
-    updateTxBuf(MSG_BLOCK, senderID, receiverID, header, result, &blockBytes[bytesPos]);
-  }
-  // send block response with length of 0 to indicate completion
-  else
-  {
-    updateTxBuf(MSG_BLOCK, senderID, receiverID, header, 0, NULL);
+    bytesPos += bytesSent;
+  
+    // add small delay to prevent message loss while sending many blocks in a row
+    uint32_t now = elapsedMS();
+    while(elapsedMS() - now < BLOCK_SEND_DELAY)
+      ;
+
+    bytesUntilEnd = (height * sizeof(Block)) - bytesPos;
   }
 
+  updateTxBuf(MSG_BLOCK, senderID, receiverID, header, 0, NULL);
   CANSend(MSG_BLOCK);
-
-  // add small delay to prevent message loss while sending many blocks in a row
-  uint32_t now = elapsedMS();
-  while(elapsedMS() - now < BLOCK_SEND_DELAY);
-
-  return result;
-}
-
-static uint8_t condenseActivePeers(uint32_t *arr, uint8_t *condensedArr)
-{
-  uint8_t len = 0;
-
-  // squish non-zero arr contents into the start of condensedArr
-  for (uint8_t i = 0; i < UINT8_MAX; i++)
-  {
-    if (activePeers[i])
-    {
-      condensedArr[len++] = i;
-    }
-  }
-
-  return len;
-}
-
-static uint8_t removeFromArray(uint8_t *arr, uint8_t size, uint8_t element)
-{
-  uint8_t newSize = size;
-  int pos = -1;
-
-  for (uint8_t i = 0; i < size && pos < 0; i++)
-  {
-    if (arr[i] == element)
-      pos = i;
-  }
-
-  if (pos >= 0)
-  {
-    for (uint8_t i = pos; i < size - 1; i++)
-    {
-      arr[i] = arr[i + 1];
-      arr[i + 1] = 0;
-    }
-
-    newSize--;
-  }
-
-  return newSize;
-}
-
-static void peerCheck(uint32_t *activePeers)
-{
-  uint32_t now = elapsedMS();
-
-  for (uint8_t i = 0; i < UINT8_MAX; i++)
-  {
-    if (activePeers[i])
-    {
-      // check if each peer has recently pulsed
-      if (now - activePeers[i] > PULSE_RATE)
-      {
-        activePeers[i] = 0;
-      }
-    }
-  }
 }
 
 static void sendNewestBlock()
 {
-  // // build new block
-  // newBlock = blockchain[height - 1];
+  // build new block
+  newBlock = blockchain[height - 1];
 
-  // dbg_write_str("Sending new block: ");
-  // printBlock(newBlock);
+  dbg_write_str("Sending new block: ");
+  printBlock(newBlock);
 
-  // // choose peer to send new block for propagation
-  // uint8_t condensedPeers[UINT8_MAX] = {0};
-  // uint8_t len = condenseActivePeers(activePeers, condensedPeers);
+  updateTxBuf(MSG_NEW, BROADCAST_ID, BROADCAST_ID, HDR_NONE, 1, &myID);
+  CANSend(MSG_NEW);
 
-  // // make sure we don't send the block back to whoever we got it from (if we didn't mine it)
-  // len = removeFromArray(condensedPeers, len, newBlock.minerID);
+  // wait a bit before sending block bytes
+  uint32_t now = elapsedMS();
+  while(elapsedMS() - now < NEW_BROADCAST_DELAY)
+    ;
 
-  // if (len > 0)
-  // {
-  //   newBlockTxPartnerID = condensedPeers[trngRandom(len)];
+  sendBlocks(1, (uint8_t *)&newBlock, HDR_NEW, myID, BROADCAST_ID);
 
-  //   dbg_write_str("Sent peer is ");
-  //   dbg_write_u8(&newBlockTxPartnerID, 1);
-  //   dbg_write_char('\n');
-
-  //   // send request
-  //   updateFilter(MSG_NEW_SEND, newBlockTxPartnerID, myID, HDR_SHARE, STF0M);
-  //   updateTxBuf(MSG_NEW_RECV, BROADCAST_ID, newBlockTxPartnerID, HDR_NONE, 1, &myID);
-
-  //   CANSend(MSG_NEW_RECV);
-
-  //   sendingNewBlock = true;
-  // }
-  // else
-  //   dbg_write_str("No peers to send to\n");
+  dbg_write_str("New block sent\n");
 }
 
 static RxState rxEntry(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
 {
   RxState nextState = RX_ENTRY;
 
-  if (sendingNewBlock)
+  if (hasMessage)
   {
-    nextState = rxNewSend(hasMessage, type, senderID, receiverID, header, rxBuf, len);
-  }
-  else if (hasMessage)
-  {
-    if (type == MSG_PULSE)
-    {
-      dbg_write_str("Pulse from: ");
-      dbg_write_u8(rxBuf, 1);
-      dbg_write_char('\n');
-
-      // mark peer as active
-      activePeers[rxBuf[0]] = elapsedMS();
-    }
-    // someone is joining the network and they want to find out the longest chain
-    else if (type == MSG_DISCOVER && header == HDR_NONE)
+    if (type == MSG_DISCOVER && header == HDR_NONE)
     {
       nextState = rxDiscoverRecv(hasMessage, type, senderID, receiverID, header, rxBuf, len);
     }
@@ -548,13 +452,7 @@ static RxState rxChain(bool hasMessage, MsgType type, uint8_t senderID, uint8_t 
       chainPartnerID = rxBuf[0];
       
       // send entire blockchain
-      uint32_t pos = 0;
-      uint32_t bytesSent = 0;
-      while((bytesSent = sendBlock(height, (uint8_t *)&blockchain, pos, HDR_CHAIN, myID, chainPartnerID)) > 0)
-      {
-        dbg_write_str("Sending partial block\n");
-        pos += bytesSent;
-      }  
+      sendBlocks(height, (uint8_t *)&blockchain, MSG_CHAIN, myID, chainPartnerID);
     
       nextState = RX_ENTRY;
 
@@ -563,7 +461,7 @@ static RxState rxChain(bool hasMessage, MsgType type, uint8_t senderID, uint8_t 
     }
     else if (type == MSG_BLOCK && header == HDR_CHAIN)
     {
-      dbg_write_str("Received chain block\n");
+      dbg_write_str("Received partial chain block\n");
 
       if (len == 0)
       {
@@ -593,7 +491,6 @@ static void resetNewRecvState()
 {
   blockBytesPos = 0;
   partialBlockPos = 0;
-  newBlockRxPartnerID = 0;
   resetFilters();
 }
 
@@ -604,114 +501,49 @@ static RxState rxNewRecv(bool hasMessage, MsgType type, uint8_t senderID, uint8_
 
   count++;
 
-  // if (count * PROCESS_SM_RATE >= NEW_RECV_TIMEOUT)
-  // {
-  //   count = 0;
+  if (count * PROCESS_SM_RATE >= NEW_RECV_TIMEOUT)
+  {
+    count = 0;
 
-  //   dbg_write_str("Timed out receiving new block\n");
-  //   resetNewRecvState();
-  //   nextState = RX_ENTRY;
-  // }
-  // else if (hasMessage && type == MSG_NEW_RECV)
-  // {
-  //   count = 0;
+    dbg_write_str("Timed out receiving new block\n");
+    resetNewRecvState();
+    nextState = RX_ENTRY;
+  }
+  else if (hasMessage)
+  {
+    count = 0;
 
-  //   if (header == HDR_NONE)
-  //   {
-  //     newBlockRxPartnerID = rxBuf[0];
-  //     blockBytesPos = 0;
+    if (type == MSG_NEW && header == HDR_NONE)
+    {
+      dbg_write_str("Ready to begin receiving new block from ");
+      dbg_write_u8(rxBuf, 1);
+      dbg_write_char('\n');
+      updateFilter(MSG_BLOCK, rxBuf[0], BROADCAST_ID, HDR_NEW, STF0M);
+    }
+    else if (type == MSG_BLOCK && header == HDR_NEW)
+    {
+      dbg_write_str("Received partial new block\n");
 
-  //     dbg_write_str("Received new block transmit request from ");
-  //     dbg_write_u8(&newBlockRxPartnerID, 1);
-  //     dbg_write_char('\n');
+      if (len == 0)
+      {
+        dbg_write_str("Completed new block receive, height ");
+        dbg_write_u16(&height, 1);
+        dbg_write_char('\n');
+        printChain();
 
-  //     updateFilter(MSG_NEW_RECV, newBlockRxPartnerID, myID, HDR_BLOCK, STF0M);
-  //     updateTxBuf(MSG_NEW_SEND, myID, newBlockRxPartnerID, HDR_SHARE, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
-  //     CANSend(MSG_NEW_SEND);
-  //   }
-  //   else if (header == HDR_BLOCK)
-  //   {
-  //     // no more data sent, meaning block was fully received
-  //     if (len == 0)
-  //     {
-  //       dbg_write_str("Completed new block receive, height ");
-  //       dbg_write_u16(&height, 1);
-  //       dbg_write_char('\n');
-  //       printChain();
+        nextState = RX_ENTRY;
 
-  //       resetNewRecvState();
+        resetNewRecvState();
+      }
+      else if (!storePartialBlock(rxBuf, len))
+      {
+        dbg_write_str("Invalid block\n");
 
-  //       nextState = RX_ENTRY;
-
-  //       // propagate the new block
-  //       sendNewestBlock();
-  //     }
-  //     // we successfully receive the data into a partial block buffer, so we can send a request for the next set of bytes
-  //     else if (storePartialBlock(rxBuf, len))
-  //     {
-  //       dbg_write_str("New block bytes stored\n");
-  //       updateTxBuf(MSG_NEW_SEND, myID, newBlockRxPartnerID, HDR_SHARE, sizeof(blockBytesPos), (uint8_t *)&blockBytesPos);
-  //       CANSend(MSG_NEW_SEND);
-  //     }
-  //     // the block we received didn't validate properly, so just don't accept it
-  //     else
-  //     {
-  //       dbg_write_str("New block error\n");
-  //       resetNewRecvState();
-
-  //       nextState = RX_ENTRY;
-  //     }
-  //   }
-  // }
-
-  return nextState;
-}
-
-static void resetNewSendState()
-{
-  newBlockTxPartnerID = 0;
-  resetFilters();
-}
-
-static RxState rxNewSend(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
-{
-  RxState nextState = RX_NEW_SEND;
-  static uint8_t count = 0;
-
-  count++;
-
-  // if (count * PROCESS_SM_RATE >= NEW_SEND_TIMEOUT)
-  // {
-  //   count = 0;
-  //   dbg_write_str("Timed out, resending send request\n");
-
-  //   updateFilter(MSG_NEW_SEND, newBlockTxPartnerID, myID, HDR_SHARE, STF0M);
-  //   updateTxBuf(MSG_NEW_RECV, BROADCAST_ID, newBlockTxPartnerID, HDR_NONE, 1, &myID);
-  //   CANSend(MSG_NEW_RECV);
-  // }
-  // else if (hasMessage && type == MSG_NEW_SEND)
-  // {
-  //   count = 0;
-
-  //   if (header == HDR_SHARE)
-  //   {
-  //     count = 0;
-
-  //     dbg_write_str("Sending partial block to ");
-  //     dbg_write_u8(&newBlockTxPartnerID, 1);
-  //     dbg_write_char('\n');
-
-  //     if (sendBlock(1, (uint8_t *)&newBlock, *(uint32_t *)rxBuf, MSG_NEW_RECV, myID, newBlockTxPartnerID))
-  //     {
-  //       dbg_write_str("Full block sent\n");
-
-  //       resetNewSendState();
-
-  //       sendingNewBlock = false;
-  //       nextState = RX_ENTRY;
-  //     }
-  //   }
-  // }
+        nextState = RX_ENTRY;
+        resetNewRecvState();
+      }
+    }
+  }
 
   return nextState;
 }
@@ -913,7 +745,7 @@ static TxState txTransmit(HysObj sw0)
   TxState nextState = TX_IDLE;
 
   // wait for pending operations
-  if (currRxState != RX_CHAIN && sendingNewBlock && !newBlockRxPartnerID)
+  if (currRxState != RX_CHAIN)
   {
     // create new transaction and block block
     Transaction newTransaction = {.srcID = myID, .msgLen = txBufPos};
@@ -1093,8 +925,6 @@ int main()
   startup();
 
   // timestamps for event scheduling
-  uint32_t pulseTimestamp = 0;
-  uint32_t peerCheckTimestamp = PEER_CHECK_RATE;
   uint32_t sw0SampleTimestamp = 0;
   uint32_t processSmTimestamp = 0;
   uint32_t displayTimestamp = 0;
@@ -1123,16 +953,6 @@ int main()
       }
 
       processSmTimestamp = msCount + PROCESS_SM_RATE;
-    }
-    if (msCount >= pulseTimestamp)
-    {
-      CANSend(MSG_PULSE);
-      pulseTimestamp = msCount + PULSE_RATE;
-    }
-    if (msCount >= peerCheckTimestamp)
-    {
-      peerCheck(activePeers);
-      peerCheckTimestamp = msCount + PEER_CHECK_RATE;
     }
   }
 
