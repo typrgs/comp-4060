@@ -12,9 +12,10 @@
 #define RX_FIFO_ELEMENT_COUNT 20
 #define TX_BUF_ELEMENT_COUNT NUM_MSG_TYPES
 
-#define PULSE_RATE 5000          // ms
-#define BLINK_RATE 500           // ms
-#define DISPLAY_REFRESH_RATE 500 // ms
+#define PULSE_RATE 5000                // ms
+#define PEER_CHECK_RATE PULSE_RATE * 2 // ms
+#define BLINK_RATE 500                 // ms
+#define DISPLAY_REFRESH_RATE 500       // ms
 
 #define DISCOVERY_TIMEOUT 1000 // ms
 #define CHAIN_TIMEOUT 2000     // ms
@@ -308,6 +309,64 @@ static void sendNewestBlock()
   sendBlocks(1, (uint8_t *)&newBlock, HDR_NEW, myID, BROADCAST_ID);
 
   dbg_write_str("New block sent\n");
+}
+
+static uint8_t condenseActivePeers(uint32_t *arr, uint8_t *condensedArr)
+{
+  uint8_t len = 0;
+
+  // squish non-zero arr contents into the start of condensedArr
+  for (uint8_t i = 0; i < UINT8_MAX; i++)
+  {
+    if (activePeers[i])
+    {
+      condensedArr[len++] = i;
+    }
+  }
+
+  return len;
+}
+
+static uint8_t removeFromArray(uint8_t *arr, uint8_t size, uint8_t element)
+{
+  uint8_t newSize = size;
+  int pos = -1;
+
+  for (uint8_t i = 0; i < size && pos < 0; i++)
+  {
+    if (arr[i] == element)
+      pos = i;
+  }
+
+  if (pos >= 0)
+  {
+    for (uint8_t i = pos; i < size - 1; i++)
+    {
+      arr[i] = arr[i + 1];
+      arr[i + 1] = 0;
+    }
+
+    newSize--;
+  }
+
+  return newSize;
+}
+
+static void peerCheck(uint32_t *activePeers)
+{
+  uint32_t now = elapsedMS();
+
+  for (uint8_t i = 0; i < UINT8_MAX; i++)
+  {
+    if (activePeers[i])
+    {
+      // check if each peer has recently pulsed
+      if (now - activePeers[i] > PULSE_RATE)
+      {
+        activePeers[i] = 0;
+      }
+    }
+  }
 }
 
 static RxState rxEntry(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
@@ -940,6 +999,7 @@ int main()
 
   // timestamps for event scheduling
   uint32_t pulseTimestamp = 0;
+  uint32_t peerCheckTimestamp = PEER_CHECK_RATE;
   uint32_t sw0SampleTimestamp = 0;
   uint32_t processSmTimestamp = 0;
   uint32_t displayTimestamp = 0;
@@ -973,6 +1033,11 @@ int main()
     {
       CANSend(MSG_PULSE);
       pulseTimestamp = msCount + PULSE_RATE;
+    }
+    if (msCount >= peerCheckTimestamp)
+    {
+      peerCheck(activePeers);
+      peerCheckTimestamp = msCount + PEER_CHECK_RATE;
     }
   }
 
