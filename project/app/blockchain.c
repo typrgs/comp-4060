@@ -81,7 +81,11 @@ bool verifyBlock(Block *blockchain, uint16_t height, Block toVerify)
   }
   else if (height > 0)
   {
-    if (!verifyNonce(toVerify.nonce))
+    if(toVerify.height != height)
+    {
+      result = false;
+    }
+    else if (!verifyNonce(toVerify.nonce))
     {
       result = false;
     }
