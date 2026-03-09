@@ -65,7 +65,7 @@ static uint8_t cycleStep = 4;
 
 enum STATES
 {
-  HDR_NONE,
+  NONE,
   KEY1_ON,
   KEY1_OFF,
   KEY2_ON,
@@ -129,7 +129,7 @@ void loadParameters()
 
 State currStateNone(bool *keyState, uint8_t *timestamp, uint8_t *currDuty)
 {
-  State nextState = HDR_NONE;
+  State nextState = NONE;
 
   // start at the repeat so we detect single hits
   *timestamp = KEY_REPEAT;
@@ -171,7 +171,7 @@ State currStateKey1On(bool *keyState, unsigned char *timestamp, uint8_t *currDut
 
 State currStateKey1Off(bool *keyState, unsigned char *timestamp, uint8_t *currDuty)
 {
-  return HDR_NONE;
+  return NONE;
 }
 
 State currStateKey2On(bool *keyState, unsigned char *timestamp, uint8_t *currDuty)
@@ -199,7 +199,7 @@ State currStateKey2On(bool *keyState, unsigned char *timestamp, uint8_t *currDut
 
 State currStateKey2Off(bool *keyState, unsigned char *timestamp, uint8_t *currDuty)
 {
-  return HDR_NONE;
+  return NONE;
 }
 
 //
@@ -530,7 +530,7 @@ int main(void)
   // state machine lookup table
   // note: not required in submitted solutions, just showing how it's done
   getNextState keyProcessing[NUM_STATES] = {currStateNone, currStateKey1On, currStateKey1Off, currStateKey2On, currStateKey2Off};
-  State currState = HDR_NONE;
+  State currState = NONE;
   uint8_t timestamp = 0;
   uint8_t currDuty = 0xff;
   uint8_t prevDuty = currDuty;

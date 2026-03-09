@@ -36,13 +36,13 @@ static uint16_t tcOvfCount = 0;
 
 typedef enum RX_RESULT
 {
-  HEADER_NONE,
+  NONE,
   VALID,
   INVALID,
   NUM_RESULTS
 } RxResult;
 
-static volatile RxResult asyncProcessResult = HEADER_NONE;
+static volatile RxResult asyncProcessResult = NONE;
 
 typedef enum RX_STATE
 {
@@ -486,7 +486,7 @@ static RxState rxEnd(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t ex
 
 static RxResult rxProcessState(uint8_t nextByte, uint8_t *buf, uint8_t *bufPos, uint8_t expectedSize)
 {
-  RxResult result = HEADER_NONE;
+  RxResult result = NONE;
   RxState nextState = rxStates[rxCurrState](nextByte, buf, bufPos, expectedSize);
 
   // verify the result of processing the state machine

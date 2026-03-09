@@ -12,6 +12,7 @@
 #define RX_FIFO_ELEMENT_COUNT 20
 #define TX_BUF_ELEMENT_COUNT NUM_MSG_TYPES
 
+#define PULSE_RATE 5000          // ms
 #define BLINK_RATE 500           // ms
 #define DISPLAY_REFRESH_RATE 500 // ms
 
@@ -118,6 +119,7 @@ static bool startNode = false;
 static bool displayAvailable = false;
 
 static uint8_t myID;
+static uint32_t activePeers[UINT8_MAX] = {0};
 
 static Block blockchain[BLOCKCHAIN_SIZE] = {0};
 static uint16_t height = 0;
@@ -191,7 +193,9 @@ static void resetFilters()
 
 static void resetTxBufs()
 {
-  for (MsgType i = MSG_DISCOVER + 1; i < NUM_MSG_TYPES; i++)
+  updateTxBuf(MSG_PULSE, BROADCAST_ID, BROADCAST_ID, HDR_NONE, 1, &myID);
+
+  for (uint8_t i = MSG_PULSE + 1; i < NUM_MSG_TYPES; i++)
   {
     updateTxBuf(i, myID, BROADCAST_ID, 0, 0, NULL);
   }
@@ -312,7 +316,15 @@ static RxState rxEntry(bool hasMessage, MsgType type, uint8_t senderID, uint8_t 
 
   if (hasMessage)
   {
-    if (type == MSG_DISCOVER && header == HDR_NONE)
+    if (type == MSG_PULSE)
+    {
+      dbg_write_str("Pulse from ");
+      dbg_write_u8(rxBuf, 1);
+      dbg_write_char('\n');
+
+      activePeers[rxBuf[0]] = elapsedMS();
+    }
+    else if (type == MSG_DISCOVER && header == HDR_NONE)
     {
       nextState = rxDiscoverRecv(hasMessage, type, senderID, receiverID, header, rxBuf, len);
     }
@@ -430,6 +442,8 @@ static RxState rxChain(bool hasMessage, MsgType type, uint8_t senderID, uint8_t 
   {
     dbg_write_str("Exiting chain state on timeout\n");
     count = 0;
+
+    resetChainState();
 
     if (!discoverySuccess)
     {
@@ -925,6 +939,7 @@ int main()
   startup();
 
   // timestamps for event scheduling
+  uint32_t pulseTimestamp = 0;
   uint32_t sw0SampleTimestamp = 0;
   uint32_t processSmTimestamp = 0;
   uint32_t displayTimestamp = 0;
@@ -953,6 +968,11 @@ int main()
       }
 
       processSmTimestamp = msCount + PROCESS_SM_RATE;
+    }
+    if (msCount >= pulseTimestamp)
+    {
+      CANSend(MSG_PULSE);
+      pulseTimestamp = msCount + PULSE_RATE;
     }
   }
 

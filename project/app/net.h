@@ -9,6 +9,7 @@
 
 typedef enum MSG_TYPE
 {
+  MSG_PULSE,
   MSG_DISCOVER,
   MSG_CHAIN,
   MSG_NEW,
