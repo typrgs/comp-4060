@@ -61,7 +61,7 @@ bool HMACVerify(uint8_t *msg, uint64_t msgLen, uint8_t *key, uint8_t keyLen, uin
   uint8_t signResult[HMAC_SIZE];
   HMACSign(msg, msgLen, key, keyLen, signResult);
 
-  for (int i = 0; i < HMAC_SIZE && verifyResult; i++)
+  for (uint8_t i = 0; i < HMAC_SIZE && verifyResult; i++)
   {
     if (signature[i] != signResult[i])
     {
