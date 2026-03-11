@@ -230,6 +230,7 @@ static void printBlock(Block block)
   dbg_write_u8((uint8_t *)&block.transaction.msg, block.transaction.msgLen);
   dbg_write_u32(&block.nonce, 1);
   dbg_write_u8(block.prevHash, 3);
+  dbg_write_u8(block.transaction.signature, 3);
   dbg_write_char('\n');
 }
 
