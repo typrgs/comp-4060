@@ -1,5 +1,7 @@
 #pragma once
 
+#include "hmac.h"
+
 #define BROADCAST_ID 0
 
 #define ID_MSG_TYPE_Pos 0
@@ -24,3 +26,9 @@ typedef enum HEADER_TYPE
   HDR_NEW,
   NUM_HEADER_TYPES
 } HeaderType;
+
+typedef struct MESSAGE
+{
+  Block block;
+  uint8_t signature[HMAC_SIZE];
+} Message;
