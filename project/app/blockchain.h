@@ -6,7 +6,7 @@
 
 #define BLOCKCHAIN_SIZE UINT8_MAX * 2
 #define BLOCK_HASH_SIZE SHA256_DIGEST_SIZE
-#define TRANSACTION_MSG_SIZE 50
+#define TRANSACTION_MSG_SIZE 20
 
 #define GENESIS_MSG "HELLOWORLD"
 #define GENESIS_MSG_LEN 10
@@ -32,5 +32,6 @@ typedef struct BLOCK
   uint32_t nonce;
 } Block;
 
+void signTransaction(Transaction *transaction, uint8_t *key, uint8_t keyLen);
 bool verifyNonce(uint32_t nonce);
-bool verifyBlock(Block *blockchain, uint16_t height, Block toVerify);
+bool verifyBlock(Block *blockchain, uint16_t height, uint8_t *key, uint8_t keyLen, Block toVerify);

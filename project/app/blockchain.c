@@ -66,26 +66,56 @@ static bool findBlock(Block *blockchain, uint16_t height, Block key)
   return false;
 }
 
-bool verifyBlock(Block *blockchain, uint16_t height, Block toVerify)
+static void fillHMACMsg(Transaction transaction, uint8_t *buf, uint8_t bufLen)
+{
+  for (uint8_t i = 0; i < bufLen - 1; i++)
+  {
+    buf[i] = transaction.msg[i];
+  }
+
+  buf[bufLen - 1] = transaction.srcID;
+}
+
+static bool fillAndVerifyHMACMsg(Transaction transaction, uint8_t *buf, uint8_t bufLen, uint8_t *key, uint8_t keyLen, uint8_t *signature)
+{
+  fillHMACMsg(transaction, buf, bufLen);
+  return HMACVerify(buf, bufLen, key, keyLen, signature);
+}
+
+void signTransaction(Transaction *transaction, uint8_t *key, uint8_t keyLen)
+{
+  uint8_t toSignLen = transaction->msgLen + 1;
+  uint8_t toSign[toSignLen];
+
+  fillHMACMsg(*transaction, toSign, toSignLen);
+  HMACSign(toSign, toSignLen, key, keyLen, transaction->signature);
+}
+
+bool verifyBlock(Block *blockchain, uint16_t height, uint8_t *key, uint8_t keyLen, Block toVerify)
 {
   bool result = true;
+  uint8_t msgToVerifyLen = toVerify.transaction.msgLen + 1;
+  uint8_t msgToVerify[msgToVerifyLen];
 
-  if (findBlock(blockchain, height, toVerify))
+  for (uint8_t i = 0; i < msgToVerifyLen - 1; i++)
+  {
+    msgToVerify[i] = toVerify.transaction.msg[i];
+  }
+
+  msgToVerify[msgToVerifyLen - 1] = toVerify.transaction.srcID;
+
+  if (height == 0 && (toVerify.nonce != GENSIS_NONCE || toVerify.transaction.msgLen != GENESIS_MSG_LEN || toVerify.transaction.srcID != GENESIS_SRC_ID))
+  {
+    result = false;
+  }
+  else if (findBlock(blockchain, height, toVerify))
   {
     dbg_write_str("Block already exists\n");
     result = false;
   }
-  else if (height == 0 && (toVerify.nonce != GENSIS_NONCE || toVerify.transaction.msgLen != GENESIS_MSG_LEN || toVerify.transaction.srcID != GENESIS_SRC_ID))
-  {
-    result = false;
-  }
   else if (height > 0)
   {
-    if(toVerify.height != height)
-    {
-      result = false;
-    }
-    else if (!verifyNonce(toVerify.nonce))
+    if (toVerify.height != height || !verifyNonce(toVerify.nonce) || !fillAndVerifyHMACMsg(toVerify.transaction, msgToVerify, msgToVerifyLen, key, keyLen, toVerify.transaction.signature))
     {
       result = false;
     }

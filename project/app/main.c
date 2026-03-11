@@ -21,8 +21,8 @@
 #define CHAIN_TIMEOUT 2000     // ms
 #define NEW_RECV_TIMEOUT 1000  // ms
 
-#define BLOCK_SEND_DELAY 10     // ms
-#define PROP_DELAY 50 // ms
+#define BLOCK_SEND_DELAY 10 // ms
+#define PROP_DELAY 50       // ms
 
 #define HYS_ON_MAX 1
 #define HYS_ON_LIM 1
@@ -133,6 +133,7 @@ static bool startNode = false;
 static bool displayAvailable = false;
 
 static uint8_t myID;
+static uint32_t sigKey = 0;
 static uint32_t activePeers[UINT8_MAX] = {0};
 
 static Block blockchain[BLOCKCHAIN_SIZE] = {0};
@@ -167,6 +168,8 @@ static void readParams()
   {
     displayAvailable = true;
   }
+
+  sigKey = *(uint32_t *)(&params[3]);
 }
 
 static void updateTxBuf(MsgType type, uint8_t senderID, uint8_t receiverID, uint8_t header, uint8_t dataLength, uint8_t *data)
@@ -254,7 +257,7 @@ static bool storePartialBlock(uint8_t *rxBuf, uint8_t len)
       Block tempBlock = *((Block *)partialBlock);
       dbg_write_str("Full block constructed ");
       printBlock(tempBlock);
-      result = verifyBlock(blockchain, height, tempBlock);
+      result = verifyBlock(blockchain, height, (uint8_t *)&sigKey, sizeof(sigKey), tempBlock);
 
       if (result)
       {
@@ -837,6 +840,7 @@ static TxState txTransmit(HysObj sw0)
     {
       newTransaction.msg[i] = txBuf[i];
     }
+    signTransaction(&newTransaction, (uint8_t *)&sigKey, sizeof(sigKey));
 
     blockchain[height].minerID = myID;
 
@@ -1078,6 +1082,10 @@ int main()
   __enable_irq();
 
   startup();
+
+  // stop program if essential params are not set properly
+  if (!myID || !sigKey)
+    return -1;
 
   // timestamps for event scheduling
   uint32_t pulseTimestamp = 0;
