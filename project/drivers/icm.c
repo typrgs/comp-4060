@@ -1,8 +1,5 @@
 #include "icm.h"
 
-#define SHA256_BLOCK_SIZE 64 // bytes
-#define SHA256_DIGEST_SIZE 32 // bytes
-
 static icm_descriptor_registers_t transferDesc0 __ALIGNED(64) = {0};
 static icm_descriptor_registers_t transferDesc1 __ALIGNED(64) = {0};
 static uint8_t digest[SHA256_DIGEST_SIZE] __ALIGNED(128); // hash area is 32 bytes to hold a SHA256 digest
