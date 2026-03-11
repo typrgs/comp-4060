@@ -1,9 +1,11 @@
 #pragma once
 
 #include "common.h"
+#include "icm.h"
+#include "hmac.h"
 
 #define BLOCKCHAIN_SIZE UINT8_MAX * 2
-#define BLOCK_HASH_SIZE 32 // bytes
+#define BLOCK_HASH_SIZE SHA256_DIGEST_SIZE
 #define TRANSACTION_MSG_SIZE 50
 
 #define GENESIS_MSG "HELLOWORLD"
@@ -18,6 +20,7 @@ typedef struct TRANSACTION
   uint8_t srcID;
   char msg[TRANSACTION_MSG_SIZE];
   uint8_t msgLen;
+  uint8_t signature[HMAC_SIZE];
 } Transaction;
 
 typedef struct BLOCK

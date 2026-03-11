@@ -26,9 +26,3 @@ typedef enum HEADER_TYPE
   HDR_NEW,
   NUM_HEADER_TYPES
 } HeaderType;
-
-typedef struct MESSAGE
-{
-  Block block;
-  uint8_t signature[HMAC_SIZE];
-} Message;
