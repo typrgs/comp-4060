@@ -15,7 +15,11 @@ void HMACSign(uint8_t *msg, uint64_t msgLen, uint8_t *key, uint8_t keyLen, uint8
   if (keyLen > SHA256_BLOCK_SIZE)
   {
     icmSHA256(key, keyLen, &outerKey[HMAC_SIZE]);
-    icmSHA256(key, keyLen, &innerKey[HMAC_SIZE]);
+
+    for (uint8_t i = HMAC_SIZE; i < SHA256_BLOCK_SIZE; i++)
+    {
+      innerKey[i] = outerKey[i];
+    }
   }
   else
   {
