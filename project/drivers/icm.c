@@ -1,8 +1,12 @@
 #include "icm.h"
 
-static icm_descriptor_registers_t transferDesc __ALIGNED(64) = {0};
-static uint8_t digest[32] __ALIGNED(128); // hash area is 32 bytes to hold a SHA256 digest
-static uint8_t hashData[64];              // data to hash needs to be padded so it is 512 bits long
+#define SHA256_BLOCK_SIZE 64 // bytes
+#define SHA256_DIGEST_SIZE 32 // bytes
+
+static icm_descriptor_registers_t transferDesc0 __ALIGNED(64) = {0};
+static icm_descriptor_registers_t transferDesc1 __ALIGNED(64) = {0};
+static uint8_t digest[SHA256_DIGEST_SIZE] __ALIGNED(128); // hash area is 32 bytes to hold a SHA256 digest
+static uint8_t hashData[SHA256_BLOCK_SIZE * 2];              // data to hash needs to be padded so it is 512 bits long
 
 void icmInit()
 {
@@ -14,45 +18,63 @@ void icmInit()
   ICM_REGS->ICM_CFG = ICM_CFG_UALGO_SHA256;
 
   // set start address of transfer descriptor
-  ICM_REGS->ICM_DSCR = (uint32_t)&transferDesc;
+  ICM_REGS->ICM_DSCR = (uint32_t)&transferDesc0;
 
   // set start address of hash area
   ICM_REGS->ICM_HASH = (uint32_t)(&digest[0]);
 
   // set start address of data region
-  transferDesc.ICM_RADDR = (uint32_t)(&hashData[0]);
+  transferDesc0.ICM_RADDR = (uint32_t)(&hashData[0]);
+  transferDesc0.ICM_RNEXT = (uint32_t)(&transferDesc1);
 
-  // set SHA256 algorithm, shortest processing delay, and set end of monitoring bit
-  transferDesc.ICM_RCFG = ICM_RCFG_ALGO(1) | ICM_RCFG_PROCDLY_SHORT | ICM_RCFG_EOM_Msk;
+  transferDesc1.ICM_RADDR = (uint32_t)(&hashData[SHA256_BLOCK_SIZE]);
+
+  // set SHA256 algorithm, shortest processing delay
+  transferDesc0.ICM_RCFG = ICM_RCFG_ALGO(1) | ICM_RCFG_PROCDLY_SHORT;
+  transferDesc1.ICM_RCFG = ICM_RCFG_EOM_Msk;
 }
 
 static void padMsg(uint8_t *msg, uint64_t msgLen)
 {
-  uint8_t hashDataPos = 0;
+  uint8_t dataPos = 0;
 
-  // reset hash data region
-  for (hashDataPos = 0; hashDataPos < 64; hashDataPos++)
+  // reset hash data regions
+  for (uint8_t i=0; i<SHA256_BLOCK_SIZE * 2; i++)
   {
-    hashData[hashDataPos] = 0;
+    hashData[i] = 0;
   }
 
-  // put the message into the hash data region
-  for (hashDataPos = 0; hashDataPos < msgLen; hashDataPos++)
+  // copy message to hash data areas
+  for(uint8_t i=0; i<msgLen; i++)
   {
-    hashData[hashDataPos] = msg[hashDataPos];
+    hashData[i] = msg[i];
   }
 
-  // append 1
-  hashData[hashDataPos++] = 0x80;
+  // append a 1
+  hashData[dataPos++] = 0x80;
 
   // use last 64 bits (8 bytes) to store the message length, big endian
   // address the length variable in bytes
   uint8_t *lenPtr = (uint8_t *)&msgLen;
 
+  // determine where to put the last 8 bytes in the data array
+  // set transfer descriptors accordingly
+  if(dataPos <= SHA256_BLOCK_SIZE - 8)
+  {
+    transferDesc0.ICM_RNEXT = 0;
+    transferDesc0.ICM_RCFG |= ICM_RCFG_EOM_Msk;
+  }
+  else
+  {
+    dataPos = (SHA256_BLOCK_SIZE * 2) - 8;
+    transferDesc0.ICM_RNEXT = (uint32_t)&transferDesc1;
+    transferDesc1.ICM_RCFG = ICM_RCFG_EOM_Msk;
+  }
+
   // place msgLen bytes in big endian order
   for (int i = 7; i >= 0; i--)
   {
-    hashData[63 - i] = lenPtr[i];
+    hashData[dataPos++] = lenPtr[i];
   }
 }
 
@@ -71,7 +93,7 @@ void icmSHA256(uint8_t *msg, uint64_t msgLen, uint8_t *result)
     ;
 
   // copy digest to result buffer
-  for (int i = 0; i < 32; i++)
+  for (int i = 0; i < SHA256_DIGEST_SIZE; i++)
   {
     result[i] = digest[i];
   }
