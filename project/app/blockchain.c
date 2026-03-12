@@ -55,7 +55,7 @@ static bool compareBlocks(Block a, Block b)
       if (a.transaction.msg[i] != b.transaction.msg[i])
         result = false;
     }
-  
+
     for (uint16_t i = 0; i < BLOCK_MAX_HASH_SIZE && result; i++)
     {
       if (a.prevHash[i] != b.prevHash[i])
@@ -74,7 +74,7 @@ static bool findBlock(Block *blockchain, uint16_t height, Block key)
   {
     if (compareBlocks(blockchain[i], key))
     {
-      result = true;;
+      result = true;
     }
   }
 
