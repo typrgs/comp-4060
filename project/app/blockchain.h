@@ -31,6 +31,20 @@ typedef struct BLOCK
   uint32_t nonce;
 } Block;
 
+typedef enum BLOCK_ERROR
+{
+  BLOCK_ERR_INCOMPLETE,
+  BLOCK_ERR_VALID,
+  BLOCK_ERR_GENESIS,
+  BLOCK_ERR_EXISTS,
+  BLOCK_ERR_SHORTER,
+  BLOCK_ERR_TALLER,
+  BLOCK_ERR_DIFF,
+  BLOCK_ERR_SIG,
+  BLOCK_ERR_HASH,
+  NUM_BLOCK_ERRORS
+} BlockError;
+
 typedef void (*blockchainMACSign)(uint8_t *msg, uint64_t msgLen, uint8_t *key, uint8_t keyLen, uint8_t *signature);
 typedef bool (*blockchainMACVerify)(uint8_t *msg, uint64_t msgLen, uint8_t *key, uint8_t keyLen, uint8_t *signature);
 typedef void (*blockchainHash)(uint8_t *msg, uint64_t msgLen, uint8_t *result);
@@ -38,4 +52,4 @@ typedef void (*blockchainHash)(uint8_t *msg, uint64_t msgLen, uint8_t *result);
 void blockchainInit(uint8_t difficulty, blockchainMACSign sign, blockchainMACVerify verify, blockchainHash hash);
 void signTransaction(Transaction *transaction, uint8_t *key, uint8_t keyLen);
 bool verifyNonce(uint32_t nonce);
-bool verifyBlock(Block *blockchain, uint16_t height, uint8_t *key, uint8_t keyLen, Block toVerify);
+BlockError verifyBlock(Block *blockchain, uint16_t height, uint8_t *key, uint8_t keyLen, Block toVerify);

@@ -16,6 +16,7 @@ typedef enum MSG_TYPE
   MSG_CHAIN,
   MSG_NEW,
   MSG_BLOCK,
+  MSG_REORGANISE,
   NUM_MSG_TYPES
 } MsgType;
 
@@ -24,5 +25,6 @@ typedef enum HEADER_TYPE
   HDR_NONE,
   HDR_CHAIN,
   HDR_NEW,
+  HDR_REORGANISE,
   NUM_HEADER_TYPES
 } HeaderType;

@@ -19,9 +19,10 @@
 #define BLINK_RATE 500                 // ms
 #define DISPLAY_REFRESH_RATE 500       // ms
 
-#define DISCOVERY_TIMEOUT 1000 // ms
-#define CHAIN_TIMEOUT 2000     // ms
-#define NEW_RECV_TIMEOUT 1000  // ms
+#define DISCOVERY_TIMEOUT 1000  // ms
+#define CHAIN_TIMEOUT 2000      // ms
+#define NEW_RECV_TIMEOUT 1000   // ms
+#define REORGANISE_TIMEOUT 1000 // ms
 
 #define BLOCK_SEND_DELAY 10 // ms
 #define PROP_DELAY 50       // ms
@@ -71,6 +72,7 @@ typedef enum RX_STATE
   RX_DISCOVER_RECV,
   RX_CHAIN,
   RX_NEW_RECV,
+  RX_REORGANISE,
   RX_NUM_STATES
 } RxState;
 
@@ -95,8 +97,9 @@ static RxState rxDiscoverSend(bool hasMessage, MsgType type, uint8_t senderID, u
 static RxState rxDiscoverRecv(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len);
 static RxState rxChain(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len);
 static RxState rxNewRecv(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len);
+static RxState rxReorganise(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len);
 
-static RxState (*rxStates[])(bool, MsgType, uint8_t, uint8_t, HeaderType, uint8_t *, uint8_t) = {rxEntry, rxDiscoverSend, rxDiscoverRecv, rxChain, rxNewRecv};
+static RxState (*rxStates[])(bool, MsgType, uint8_t, uint8_t, HeaderType, uint8_t *, uint8_t) = {rxEntry, rxDiscoverSend, rxDiscoverRecv, rxChain, rxNewRecv, rxReorganise};
 static RxState currRxState = RX_DISCOVER_SEND;
 
 static TxState txIdle(HysObj);
@@ -148,7 +151,6 @@ static uint8_t chainPartnerID = 0;
 
 static uint8_t partialBlock[sizeof(Block)];
 static uint8_t partialBlockPos = 0;
-static uint32_t blockBytesPos = 0;
 
 static Block newBlock = {0};
 static uint8_t newBlockSenderID = 0;
@@ -213,6 +215,7 @@ static void resetFilters()
   }
 
   updateFilter(MSG_NEW, BROADCAST_ID, myID, HDR_NONE, STF0M);
+  updateFilter(MSG_REORGANISE, BROADCAST_ID, myID, HDR_NONE, STF0M);
 }
 
 static void resetTxBufs()
@@ -223,6 +226,16 @@ static void resetTxBufs()
   }
 
   updateTxBuf(MSG_PULSE, BROADCAST_ID, BROADCAST_ID, HDR_NONE, 1, &myID);
+}
+
+static void resetBlockchain()
+{
+  Block empty = {0};
+
+  for (uint16_t i = 0; i < height; i++)
+  {
+    blockchain[i] = empty;
+  }
 }
 
 static void printBlock(Block block)
@@ -244,9 +257,9 @@ static void printChain()
   }
 }
 
-static bool storePartialBlock(uint8_t *rxBuf, uint8_t len)
+static BlockError storePartialBlock(uint8_t *rxBuf, uint8_t len, uint16_t chainIndex)
 {
-  bool result = true;
+  BlockError result = BLOCK_ERR_INCOMPLETE;
 
   // build block from received data
   for (int i = 0; i < len; i++)
@@ -262,12 +275,12 @@ static bool storePartialBlock(uint8_t *rxBuf, uint8_t len)
       printBlock(tempBlock);
       result = verifyBlock(blockchain, height, (uint8_t *)&sigKey, sizeof(sigKey), tempBlock);
 
-      if (result)
+      if (result == BLOCK_ERR_VALID)
       {
         dbg_write_str("New block added ");
         printBlock(tempBlock);
 
-        blockchain[height++] = tempBlock;
+        blockchain[chainIndex] = tempBlock;
       }
 
       // reset partial block buffer
@@ -277,8 +290,6 @@ static bool storePartialBlock(uint8_t *rxBuf, uint8_t len)
       }
       partialBlockPos = 0;
     }
-
-    blockBytesPos++;
   }
 
   return result;
@@ -301,13 +312,15 @@ static void sendBlocks(uint16_t height, uint8_t *blockBytes, HeaderType header, 
     CANSend(MSG_BLOCK);
 
     bytesPos += bytesSent;
+    bytesUntilEnd = (height * sizeof(Block)) - bytesPos;
 
     // add small delay to prevent message loss while sending many blocks in a row
-    uint32_t now = elapsedMS();
-    while (elapsedMS() - now < BLOCK_SEND_DELAY)
-      ;
-
-    bytesUntilEnd = (height * sizeof(Block)) - bytesPos;
+    if (bytesUntilEnd > 0)
+    {
+      uint32_t now = elapsedMS();
+      while (elapsedMS() - now < BLOCK_SEND_DELAY)
+        ;
+    }
   }
 
   updateTxBuf(MSG_BLOCK, senderID, receiverID, header, 0, NULL);
@@ -500,7 +513,7 @@ static void resetChainState()
   chainPartnerID = 0;
   longestChainPeerID = 0;
   longestChainHeight = 0;
-  blockBytesPos = 0;
+  partialBlockPos = 0;
   resetFilters();
 }
 
@@ -559,14 +572,22 @@ static RxState rxChain(bool hasMessage, MsgType type, uint8_t senderID, uint8_t 
         resetChainState();
         discoverySuccess = true;
       }
-      else if (!storePartialBlock(rxBuf, len))
+      else
       {
-        dbg_write_str("Invalid chain\n");
+        BlockError storageResult = storePartialBlock(rxBuf, len, height);
+        if (storageResult == BLOCK_ERR_VALID)
+        {
+          height++;
+        }
+        else if (storageResult != BLOCK_ERR_INCOMPLETE)
+        {
+          dbg_write_str("Invalid chain\n");
 
-        nextState = RX_DISCOVER_SEND;
+          nextState = RX_DISCOVER_SEND;
 
-        resetChainState();
-        discoverySuccess = false;
+          resetChainState();
+          discoverySuccess = false;
+        }
       }
     }
   }
@@ -576,9 +597,31 @@ static RxState rxChain(bool hasMessage, MsgType type, uint8_t senderID, uint8_t 
 
 static void resetNewRecvState()
 {
-  blockBytesPos = 0;
   partialBlockPos = 0;
   resetFilters();
+}
+
+static RxState handleNewBlockError(BlockError err, uint8_t senderID)
+{
+  RxState nextState = RX_ENTRY;
+  dbg_write_str("New received block is invalid: ");
+  dbg_write_u8(&err, 1);
+  dbg_write_char('\n');
+
+  resetNewRecvState();
+
+  // if the received block is taller than expected, we need to reorganise our chain to include the blocks on the longer chain
+  if (err == BLOCK_ERR_TALLER)
+  {
+    // send a request to the block sender and request all blocks in their chain starting from our current height
+    updateTxBuf(MSG_REORGANISE, BROADCAST_ID, senderID, HDR_NONE, 2, (uint8_t *)&height);
+    updateFilter(MSG_REORGANISE, senderID, myID, HDR_REORGANISE, STF0M);
+    CANSend(MSG_REORGANISE);
+
+    nextState = RX_REORGANISE;
+  }
+
+  return nextState;
 }
 
 static RxState rxNewRecv(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
@@ -607,12 +650,14 @@ static RxState rxNewRecv(bool hasMessage, MsgType type, uint8_t senderID, uint8_
       dbg_write_char('\n');
       updateFilter(MSG_BLOCK, rxBuf[0], myID, HDR_NEW, STF0M);
     }
-    else if (type == MSG_BLOCK && header == HDR_NEW)
+    else if (type == MSG_BLOCK && header == HDR_NEW && len > 0)
     {
       dbg_write_str("Received partial new block\n");
+      BlockError storageResult = storePartialBlock(rxBuf, len, height);
 
-      if (len == 0)
+      if (storageResult == BLOCK_ERR_VALID)
       {
+        height++;
         dbg_write_str("Completed new block receive, height ");
         dbg_write_u16(&height, 1);
         dbg_write_char('\n');
@@ -625,14 +670,53 @@ static RxState rxNewRecv(bool hasMessage, MsgType type, uint8_t senderID, uint8_
         // propagate it
         sendNewestBlock(senderID);
       }
-      else if (!storePartialBlock(rxBuf, len))
+      else if (storageResult != BLOCK_ERR_INCOMPLETE)
       {
-        dbg_write_str("Invalid block\n");
+        nextState = handleNewBlockError(storageResult, senderID);
+      }
+    }
+  }
 
-        // TODO: Add error message check when received block is invalid
+  return nextState;
+}
 
-        nextState = RX_ENTRY;
-        resetNewRecvState();
+static RxState rxReorganise(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len)
+{
+  RxState nextState = RX_REORGANISE;
+  static uint8_t count = 0;
+
+  count++;
+
+  if (count * PROCESS_SM_RATE >= REORGANISE_TIMEOUT)
+  {
+    count = 0;
+    resetFilters();
+    resetBlockchain();
+    nextState = RX_DISCOVER_SEND;
+  }
+  else if (hasMessage)
+  {
+    count = 0;
+
+    if (type == MSG_REORGANISE && header == HDR_NONE)
+    {
+      uint16_t startingHeight = *(uint16_t *)rxBuf;
+      sendBlocks(height - startingHeight, (uint8_t *)&blockchain[startingHeight], HDR_REORGANISE, myID, senderID);
+    }
+    else if (type == MSG_BLOCK && header == HDR_REORGANISE)
+    {
+      BlockError storageResult = storePartialBlock(rxBuf, len, height);
+
+      if (storageResult == BLOCK_ERR_VALID)
+      {
+        height++;
+      }
+      // if we encounter any error while receiving intermediate blocks, we reset our chain and do a rediscovery
+      else if (storageResult != BLOCK_ERR_INCOMPLETE)
+      {
+        resetFilters();
+        resetBlockchain();
+        nextState = RX_DISCOVER_SEND;
       }
     }
   }
