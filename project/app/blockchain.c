@@ -22,7 +22,7 @@ bool verifyNonce(uint32_t nonce)
     result = false;
   }
 
-  for (int i = 0; i < blockchain_diff && result; i++)
+  for (int i = 0; i < blockchainDiff && result; i++)
   {
     if (nonce % 10 != 0)
     {
