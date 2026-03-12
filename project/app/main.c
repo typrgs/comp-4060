@@ -8,6 +8,8 @@
 #include "display.h"
 #include "spi.h"
 
+#define BLOCKCHAIN_DIFFICULTY 5
+
 #define EXTENDED_FILTER_COUNT NUM_MSG_TYPES
 #define RX_FIFO_ELEMENT_COUNT 20
 #define TX_BUF_ELEMENT_COUNT NUM_MSG_TYPES
@@ -1051,7 +1053,7 @@ static void startup()
   trngInit();
   spiInit();
   displayInit();
-  blockchainInit(HMACSign, HMACVerify, icmSHA256);
+  blockchainInit(BLOCKCHAIN_DIFFICULTY, HMACSign, HMACVerify, icmSHA256);
   
   // setup filters
   resetFilters();

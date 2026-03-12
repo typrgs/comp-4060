@@ -35,7 +35,7 @@ typedef void (*blockchainMACSign)(uint8_t *msg, uint64_t msgLen, uint8_t *key, u
 typedef bool (*blockchainMACVerify)(uint8_t *msg, uint64_t msgLen, uint8_t *key, uint8_t keyLen, uint8_t *signature);
 typedef void (*blockchainHash)(uint8_t *msg, uint64_t msgLen, uint8_t *result);
 
-void blockchainInit(blockchainMACSign sign, blockchainMACVerify verify, blockchainHash hash);
+void blockchainInit(uint8_t difficulty, blockchainMACSign sign, blockchainMACVerify verify, blockchainHash hash);
 void signTransaction(Transaction *transaction, uint8_t *key, uint8_t keyLen);
 bool verifyNonce(uint32_t nonce);
 bool verifyBlock(Block *blockchain, uint16_t height, uint8_t *key, uint8_t keyLen, Block toVerify);

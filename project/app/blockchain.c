@@ -1,12 +1,13 @@
 #include "blockchain.h"
 
-static uint8_t blockchain_diff = 0;
+static uint8_t blockchainDiff = 0;
 static blockchainMACSign sign = NULL;
 static blockchainMACVerify verify = NULL;
 static blockchainHash hash = NULL;
 
-void blockchainInit(blockchainMACSign MACSign, blockchainMACVerify MACVerify, blockchainHash hashF)
+void blockchainInit(uint8_t difficulty, blockchainMACSign MACSign, blockchainMACVerify MACVerify, blockchainHash hashF)
 {
+  blockchainDiff = difficulty;
   sign = MACSign;
   verify = MACVerify;
   hash = hashF;
