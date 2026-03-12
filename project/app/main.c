@@ -944,9 +944,9 @@ static void processPropState(Block newBlock)
 
 static uint8_t countDigits(uint16_t number)
 {
-  uint8_t count = 0;
+  uint8_t count = 1;
 
-  while (number > 0 || count == 0)
+  while (number > 0)
   {
     number /= 10;
     count++;
