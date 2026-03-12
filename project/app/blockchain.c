@@ -1,7 +1,16 @@
 #include "blockchain.h"
-#include "icm.h"
 
-#define BLOCKCHAIN_DIFFICULTY 5
+static uint8_t blockchain_diff = 0;
+static blockchainMACSign sign = NULL;
+static blockchainMACVerify verify = NULL;
+static blockchainHash hash = NULL;
+
+void blockchainInit(blockchainMACSign MACSign, blockchainMACVerify MACVerify, blockchainHash hashF)
+{
+  sign = MACSign;
+  verify = MACVerify;
+  hash = hashF;
+}
 
 bool verifyNonce(uint32_t nonce)
 {
@@ -12,7 +21,7 @@ bool verifyNonce(uint32_t nonce)
     result = false;
   }
 
-  for (int i = 0; i < BLOCKCHAIN_DIFFICULTY && result; i++)
+  for (int i = 0; i < blockchain_diff && result; i++)
   {
     if (nonce % 10 != 0)
     {
@@ -44,7 +53,7 @@ static bool compareBlocks(Block a, Block b)
       return false;
   }
 
-  for (uint16_t i = 0; i < BLOCK_HASH_SIZE; i++)
+  for (uint16_t i = 0; i < BLOCK_MAX_HASH_SIZE; i++)
   {
     if (a.prevHash[i] != b.prevHash[i])
       return false;
@@ -66,7 +75,7 @@ static bool findBlock(Block *blockchain, uint16_t height, Block key)
   return false;
 }
 
-static void fillHMACMsg(Transaction transaction, uint8_t *buf, uint8_t bufLen)
+static void fillMACMsg(Transaction transaction, uint8_t *buf, uint8_t bufLen)
 {
   for (uint8_t i = 0; i < bufLen - 1; i++)
   {
@@ -76,10 +85,10 @@ static void fillHMACMsg(Transaction transaction, uint8_t *buf, uint8_t bufLen)
   buf[bufLen - 1] = transaction.srcID;
 }
 
-static bool fillAndVerifyHMACMsg(Transaction transaction, uint8_t *buf, uint8_t bufLen, uint8_t *key, uint8_t keyLen, uint8_t *signature)
+static bool fillAndVerifyMACMsg(Transaction transaction, uint8_t *buf, uint8_t bufLen, uint8_t *key, uint8_t keyLen, uint8_t *signature)
 {
-  fillHMACMsg(transaction, buf, bufLen);
-  return HMACVerify(buf, bufLen, key, keyLen, signature);
+  fillMACMsg(transaction, buf, bufLen);
+  return verify(buf, bufLen, key, keyLen, signature);
 }
 
 void signTransaction(Transaction *transaction, uint8_t *key, uint8_t keyLen)
@@ -87,8 +96,8 @@ void signTransaction(Transaction *transaction, uint8_t *key, uint8_t keyLen)
   uint8_t toSignLen = transaction->msgLen + 1;
   uint8_t toSign[toSignLen];
 
-  fillHMACMsg(*transaction, toSign, toSignLen);
-  HMACSign(toSign, toSignLen, key, keyLen, transaction->signature);
+  fillMACMsg(*transaction, toSign, toSignLen);
+  sign(toSign, toSignLen, key, keyLen, transaction->signature);
 }
 
 bool verifyBlock(Block *blockchain, uint16_t height, uint8_t *key, uint8_t keyLen, Block toVerify)
@@ -115,20 +124,20 @@ bool verifyBlock(Block *blockchain, uint16_t height, uint8_t *key, uint8_t keyLe
   }
   else if (height > 0)
   {
-    if (toVerify.height != height || !verifyNonce(toVerify.nonce) || !fillAndVerifyHMACMsg(toVerify.transaction, msgToVerify, msgToVerifyLen, key, keyLen, toVerify.transaction.signature))
+    if (toVerify.height != height || !verifyNonce(toVerify.nonce) || !fillAndVerifyMACMsg(toVerify.transaction, msgToVerify, msgToVerifyLen, key, keyLen, toVerify.transaction.signature))
     {
       result = false;
     }
     else
     {
       // hash current top block for use in comparison
-      uint8_t prevHash[BLOCK_HASH_SIZE] = {0};
+      uint8_t prevHash[BLOCK_MAX_HASH_SIZE] = {0};
 
       // msg length is sizeof(Block) * 2 because the length of a hex string needed to represent the size is twice the total amount of bytes
       // (each byte is represented by 8 bits = 2 hex digits)
-      icmSHA256((uint8_t *)&(blockchain[height - 1]), sizeof(Block), prevHash);
+      hash((uint8_t *)&(blockchain[height - 1]), sizeof(Block), prevHash);
 
-      for (int i = 0; i < BLOCK_HASH_SIZE && result; i++)
+      for (int i = 0; i < BLOCK_MAX_HASH_SIZE && result; i++)
       {
         if (toVerify.prevHash[i] != prevHash[i])
         {

@@ -1051,7 +1051,8 @@ static void startup()
   trngInit();
   spiInit();
   displayInit();
-
+  blockchainInit(HMACSign, HMACVerify, icmSHA256);
+  
   // setup filters
   resetFilters();
 
