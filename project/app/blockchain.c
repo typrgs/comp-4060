@@ -38,41 +38,47 @@ bool verifyNonce(uint32_t nonce)
 
 static bool compareBlocks(Block a, Block b)
 {
+  bool result = true;
+
   if (a.height != b.height)
-    return false;
-  if (a.minerID != b.minerID)
-    return false;
-  if (a.nonce != b.nonce)
-    return false;
-  if (a.transaction.srcID != b.transaction.srcID)
-    return false;
-
-  for (uint8_t i = 0; i < TRANSACTION_MSG_SIZE; i++)
+    result = false;
+  else if (a.minerID != b.minerID)
+    result = false;
+  else if (a.nonce != b.nonce)
+    result = false;
+  else if (a.transaction.srcID != b.transaction.srcID)
+    result = false;
+  else
   {
-    if (a.transaction.msg[i] != b.transaction.msg[i])
-      return false;
+    for (uint8_t i = 0; i < TRANSACTION_MSG_SIZE && result; i++)
+    {
+      if (a.transaction.msg[i] != b.transaction.msg[i])
+        result = false;
+    }
+  
+    for (uint16_t i = 0; i < BLOCK_MAX_HASH_SIZE && result; i++)
+    {
+      if (a.prevHash[i] != b.prevHash[i])
+        result = false;
+    }
   }
 
-  for (uint16_t i = 0; i < BLOCK_MAX_HASH_SIZE; i++)
-  {
-    if (a.prevHash[i] != b.prevHash[i])
-      return false;
-  }
-
-  return true;
+  return result;
 }
 
 static bool findBlock(Block *blockchain, uint16_t height, Block key)
 {
-  for (uint16_t i = 0; i < height; i++)
+  bool result = false;
+
+  for (uint16_t i = 0; i < height && !result; i++)
   {
     if (compareBlocks(blockchain[i], key))
     {
-      return true;
+      result = true;;
     }
   }
 
-  return false;
+  return result;
 }
 
 static void fillMACMsg(Transaction transaction, uint8_t *buf, uint8_t bufLen)
