@@ -629,6 +629,8 @@ static RxState rxNewRecv(bool hasMessage, MsgType type, uint8_t senderID, uint8_
       {
         dbg_write_str("Invalid block\n");
 
+        // TODO: Add error message check when received block is invalid
+
         nextState = RX_ENTRY;
         resetNewRecvState();
       }
@@ -1054,7 +1056,7 @@ static void startup()
   spiInit();
   displayInit();
   blockchainInit(BLOCKCHAIN_DIFFICULTY, HMACSign, HMACVerify, icmSHA256);
-  
+
   // setup filters
   resetFilters();
 
