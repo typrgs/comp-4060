@@ -312,15 +312,13 @@ static void sendBlocks(uint16_t height, uint8_t *blockBytes, HeaderType header, 
     CANSend(MSG_BLOCK);
 
     bytesPos += bytesSent;
-    bytesUntilEnd = (height * sizeof(Block)) - bytesPos;
-
+    
     // add small delay to prevent message loss while sending many blocks in a row
-    if (bytesUntilEnd > 0)
-    {
-      uint32_t now = elapsedMS();
-      while (elapsedMS() - now < BLOCK_SEND_DELAY)
-        ;
-    }
+    uint32_t now = elapsedMS();
+    while (elapsedMS() - now < BLOCK_SEND_DELAY)
+      ;
+
+    bytesUntilEnd = (height * sizeof(Block)) - bytesPos;
   }
 
   updateTxBuf(MSG_BLOCK, senderID, receiverID, header, 0, NULL);

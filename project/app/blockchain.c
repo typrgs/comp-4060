@@ -115,44 +115,52 @@ BlockError verifyBlock(Block *blockchain, uint16_t height, uint8_t *key, uint8_t
 
   if (height == 0 && (toVerify.nonce != GENSIS_NONCE || toVerify.transaction.msgLen != GENESIS_MSG_LEN || toVerify.transaction.srcID != GENESIS_SRC_ID))
   {
+    dbg_write_str("Bad genesis block\n");
     result = BLOCK_ERR_GENESIS;
   }
-  else if (findBlock(blockchain, height, toVerify))
+  else if (height > 0)
   {
-    dbg_write_str("Block already exists\n");
-    result = BLOCK_ERR_EXISTS;
-  }
-  else if (toVerify.height > height)
-  {
-    result = BLOCK_ERR_TALLER;
-  }
-  else if (toVerify.height < height)
-  {
-    result = BLOCK_ERR_SHORTER;
-  }
-  else if (!verifyNonce(toVerify.nonce))
-  {
-    result = BLOCK_ERR_DIFF;
-  }
-  else if (!fillAndVerifyMACMsg(toVerify.transaction, msgToVerify, msgToVerifyLen, key, keyLen, toVerify.transaction.signature))
-  {
-    result = BLOCK_ERR_SIG;
-  }
-  else
-  {
-    // hash current top block for use in comparison
-    uint8_t prevHash[BLOCK_MAX_HASH_SIZE] = {0};
-
-    // msg length is sizeof(Block) * 2 because the length of a hex string needed to represent the size is twice the total amount of bytes
-    // (each byte is represented by 8 bits = 2 hex digits)
-    hash((uint8_t *)&(blockchain[height - 1]), sizeof(Block), prevHash);
-
-    for (int i = 0; i < BLOCK_MAX_HASH_SIZE && result != BLOCK_ERR_HASH; i++)
+    if (findBlock(blockchain, height, toVerify))
     {
-      if (toVerify.prevHash[i] != prevHash[i])
+      dbg_write_str("Block already exists\n");
+      result = BLOCK_ERR_EXISTS;
+    }
+    else if (toVerify.height > height)
+    {
+      dbg_write_str("Received block is taller\n");
+      result = BLOCK_ERR_TALLER;
+    }
+    else if (toVerify.height < height)
+    {
+      dbg_write_str("Received block is shorter\n");
+      result = BLOCK_ERR_SHORTER;
+    }
+    else if (!verifyNonce(toVerify.nonce))
+    {
+      dbg_write_str("Received block has incorrect difficulty\n");
+      result = BLOCK_ERR_DIFF;
+    }
+    else if (!fillAndVerifyMACMsg(toVerify.transaction, msgToVerify, msgToVerifyLen, key, keyLen, toVerify.transaction.signature))
+    {
+      dbg_write_str("Received block has incorrect signature\n");
+      result = BLOCK_ERR_SIG;
+    }
+    else
+    {
+      // hash current top block for use in comparison
+      uint8_t prevHash[BLOCK_MAX_HASH_SIZE] = {0};
+  
+      // msg length is sizeof(Block) * 2 because the length of a hex string needed to represent the size is twice the total amount of bytes
+      // (each byte is represented by 8 bits = 2 hex digits)
+      hash((uint8_t *)&(blockchain[height - 1]), sizeof(Block), prevHash);
+  
+      for (int i = 0; i < BLOCK_MAX_HASH_SIZE && result != BLOCK_ERR_HASH; i++)
       {
-        dbg_write_str("Prev hash does not match\n");
-        result = BLOCK_ERR_HASH;
+        if (toVerify.prevHash[i] != prevHash[i])
+        {
+          dbg_write_str("Prev hash does not match\n");
+          result = BLOCK_ERR_HASH;
+        }
       }
     }
   }
