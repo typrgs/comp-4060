@@ -236,6 +236,7 @@ static void resetBlockchain()
   {
     blockchain[i] = empty;
   }
+  height = 0;
 }
 
 static void printBlock(Block block)
@@ -612,11 +613,12 @@ static RxState handleNewBlockError(BlockError err, uint8_t senderID)
   if (err == BLOCK_ERR_TALLER)
   {
     // send a request to the block sender and request all blocks in their chain starting from our current height
-    updateTxBuf(MSG_REORGANISE, BROADCAST_ID, senderID, HDR_NONE, 2, (uint8_t *)&height);
     updateFilter(MSG_REORGANISE, senderID, myID, HDR_REORGANISE, STF0M);
+    updateTxBuf(MSG_REORGANISE, BROADCAST_ID, senderID, HDR_NONE, 2, (uint8_t *)&height);
     CANSend(MSG_REORGANISE);
 
     nextState = RX_REORGANISE;
+    discoverySuccess = false;
   }
 
   return nextState;
@@ -643,7 +645,7 @@ static RxState rxNewRecv(bool hasMessage, MsgType type, uint8_t senderID, uint8_
 
     if (type == MSG_NEW && header == HDR_NONE)
     {
-      dbg_write_str("Ready to begin receiving new block from ");
+      dbg_write_str("Ready to begin receiving new block\n");
       dbg_write_u8(rxBuf, 1);
       dbg_write_char('\n');
       updateFilter(MSG_BLOCK, rxBuf[0], myID, HDR_NEW, STF0M);
@@ -703,18 +705,27 @@ static RxState rxReorganise(bool hasMessage, MsgType type, uint8_t senderID, uin
     }
     else if (type == MSG_BLOCK && header == HDR_REORGANISE)
     {
-      BlockError storageResult = storePartialBlock(rxBuf, len, height);
-
-      if (storageResult == BLOCK_ERR_VALID)
+      if(len == 0)
       {
-        height++;
-      }
-      // if we encounter any error while receiving intermediate blocks, we reset our chain and do a rediscovery
-      else if (storageResult != BLOCK_ERR_INCOMPLETE)
-      {
+        discoverySuccess = true;
         resetFilters();
-        resetBlockchain();
-        nextState = RX_DISCOVER_SEND;
+        nextState = RX_ENTRY;
+      }
+      else
+      {
+        BlockError storageResult = storePartialBlock(rxBuf, len, height);
+  
+        if (storageResult == BLOCK_ERR_VALID)
+        {
+          height++;
+        }
+        // if we encounter any error while receiving intermediate blocks, we reset our chain and do a rediscovery
+        else if (storageResult != BLOCK_ERR_INCOMPLETE)
+        {
+          resetFilters();
+          resetBlockchain();
+          nextState = RX_DISCOVER_SEND;
+        }
       }
     }
   }
