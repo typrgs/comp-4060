@@ -32,3 +32,50 @@ Jan 29:
 Jan 30:
   - Got ICM driver working and hashing bytes
   - Create structs for tx buf and filter for easier updating
+
+Feb 1:
+  - Add helpers in app for resetting/updating tx/filter buffers
+  - Change filter to represent ID as an array rather than as a discrete value
+  - Start implementing a blocking "consensus" operation
+    - including block verification
+
+Feb 8:
+  - Redesign network message protocol by creating a header enum that is placed into the ID of every message
+
+Feb 12:
+  - Add TRNG driver
+  - Implement network discovery on join
+
+Feb 13:
+  - Implement new block sharing
+    - Add helpers for sending/receiving blocks
+    - Create separate states for sending/receiving new blocks
+
+Feb 17:
+  - Implement sending new block for propagation
+
+Feb 18:
+  - Redesign communications
+    - Had issues with fault tolerance during propagation due to message processing being interrupt driven
+    - Switch message processing to a stateful approach so invalid app state is less likely
+      - Allowed timeouts while processing
+    - CAN callback becomes just an update of a variable
+
+Feb 24:
+  - Update block transactions to contain strings rather than ints
+  - Begin implementing a state machine/input for morse code
+    - this machine is what handles the LED status indicator
+
+March 1:
+  - Add display driver and font table
+
+March 5:
+  - Implement display in the app
+
+March 7:
+  - Implement discovery as a state machine
+  - Makes rediscovery easy when local chain is detected to be invalid
+
+March 8:
+  - Implement block propagation as a state machine
+  - separates sending block messages from normal message processing state
