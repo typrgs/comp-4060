@@ -24,7 +24,7 @@
 #define NEW_RECV_TIMEOUT 1000   // ms
 #define REORGANISE_TIMEOUT 1000 // ms
 
-#define BLOCK_SEND_DELAY 10 // ms
+#define BLOCK_SEND_DELAY 25 // ms
 #define PROP_DELAY 50       // ms
 
 #define HYS_ON_MAX 1
