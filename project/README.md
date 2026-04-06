@@ -37,6 +37,10 @@ Each type of 'request' over the network has its own message type that is set in 
 
 The type, header, sender ID, and receiver ID are set in specific parts of a message's ID. The ID of a message is parsed as an array of bytes, rather than a 4 byte uint so that the additional information of the message is easier to be parsed.
 
+#### 1.2.3 Handshaking
+In my initial implementation, almost everything that wasn't a pulse was done with a handshake. I did this because I was scared of communications being inconsistent/moving to fast and having to deal with many dropped messages, but I realized I was dealing with more communications issues with handshaking, as sometimes the handshake messages would get lost (due to my hardware setup which was quite bad with all the unnecessary wires). Combining this with the fact that I wasn't saving much state with the communications at the time meant I didn't really have a way to recover from those errors. I eventually decided to lose the handshakes and instead go with an indicator message that will allow the node being communicated with to prepare for the incoming messages without any response to the indicator. I tested this out and realized it actually worked quite well and I found that fewer messages were getting lost compared to using handshakes. At this point, I also added more state to the communications so that I could timeout if nothing was received after the indicator, allowing the nodes to be reset to an idle state rather than staying blocked.
+
+
 ### 1.3 Digital Signatures
 The messages for the blockchain are signed using an HMAC implementation that uses SHA256 as the encryption algorithm. The shared private key for network communication should be set in the flash parameters of each node, as outlined in the section Compiling and Running. This was implemented just for fun but also adds to the network security of the blockchain (i think).
 
@@ -96,8 +100,7 @@ Contains interfaces for drivers.
 
 
 ## 3 Application State Management
-All application state is managed using 3 state machines: Rx, Tx, and Prop, used for receiving messages, reading user input, and propagating blocks. Initially, I only had the Rx and Tx state machines and broadcasted new blocks in a separate state in the Tx state machine, but when I switched to propagation, I found it easier to just make a whole new state machine specific to that operation rather than trying to fit it into the Tx state machine.
-
+All application state is managed using 3 state machines: Rx, Tx, and Prop, used for receiving messages, reading user input, and propagating blocks. Initially, I only had the Rx and Tx state machines and broadcasted new blocks in a state in the Tx state machine, but when I switched to propagation, I found it easier to just make a whole new state machine specific to that operation rather than trying to fit it into the Tx state machine. This also allowed the nodes to continue to receive/send messages like pulses or discovery requests while propagating a new block.
 
 ### 3.1 Rx state machine
 The Rx state machine has 5 states: Entry, Discover Send, Discover Receive, Chain, and Reorganise. Processing this state machine receives the next message in the message FIFO.
@@ -145,7 +148,7 @@ This state will choose a peer from the condensed array and transmit the new bloc
 
 
 ## 4 Message Sequences
-The following are high-level sequence diagrams that outline some message sequences that occur between 3 nodes.  
+The following are high-level sequence diagrams that outline some message sequences that occur between 3 nodes. These sequence diagrams can be rendered on the online Mermaid viewer.  
 Broadcast messages are consecutive arrows.
 
 ### 4.1 Pulse
