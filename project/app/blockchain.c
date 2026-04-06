@@ -22,6 +22,7 @@ bool verifyNonce(uint32_t nonce)
     result = false;
   }
 
+  // count the # of 0's at the end of the nonce to verify difficulty
   for (int i = 0; i < blockchainDiff && result; i++)
   {
     if (nonce % 10 != 0)
@@ -51,12 +52,14 @@ static bool compareBlocks(Block a, Block b)
     result = false;
   else
   {
+    // make sure message matches
     for (uint8_t i = 0; i < TRANSACTION_MSG_SIZE && result; i++)
     {
       if (a.transaction.msg[i] != b.transaction.msg[i])
         result = false;
     }
 
+    // make sure hash matches
     for (uint16_t i = 0; i < BLOCK_MAX_HASH_SIZE && result; i++)
     {
       if (a.prevHash[i] != b.prevHash[i])
@@ -71,6 +74,7 @@ static bool findBlock(Block *blockchain, uint16_t height, Block key)
 {
   bool result = false;
 
+  // go through blockchain and run compare to check all blocks for key
   for (uint16_t i = 0; i < height && !result; i++)
   {
     if (compareBlocks(blockchain[i], key))
@@ -84,6 +88,7 @@ static bool findBlock(Block *blockchain, uint16_t height, Block key)
 
 static void fillMACMsg(Transaction transaction, uint8_t *buf, uint8_t bufLen)
 {
+  // put transaction message and src ID into passed buffer
   for (uint8_t i = 0; i < bufLen - 1; i++)
   {
     buf[i] = transaction.msg[i];
@@ -103,6 +108,7 @@ void signTransaction(Transaction *transaction, uint8_t *key, uint8_t keyLen)
   uint8_t toSignLen = transaction->msgLen + 1;
   uint8_t toSign[toSignLen];
 
+  // fill toSign buffer and make signature from that
   fillMACMsg(*transaction, toSign, toSignLen);
   sign(toSign, toSignLen, key, keyLen, transaction->signature);
 }

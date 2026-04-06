@@ -12,5 +12,6 @@ uint32_t trngRandom(uint32_t max)
   while ((TRNG_REGS->TRNG_INTFLAG & TRNG_INTFLAG_DATARDY_Msk) == 0)
     ;
 
+  // mod the data if given max is non-zero, otherwise return the raw data
   return (max > 0) ? (TRNG_REGS->TRNG_DATA % max) : TRNG_REGS->TRNG_DATA;
 }

@@ -92,6 +92,7 @@ typedef enum PROP_STATE
   NUM_PROP_STATES
 } PropState;
 
+// Rx state machine functions
 static RxState rxEntry(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len);
 static RxState rxDiscoverSend(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len);
 static RxState rxDiscoverRecv(bool hasMessage, MsgType type, uint8_t senderID, uint8_t receiverID, HeaderType header, uint8_t *rxBuf, uint8_t len);
@@ -102,6 +103,7 @@ static RxState rxReorganise(bool hasMessage, MsgType type, uint8_t senderID, uin
 static RxState (*rxStates[])(bool, MsgType, uint8_t, uint8_t, HeaderType, uint8_t *, uint8_t) = {rxEntry, rxDiscoverSend, rxDiscoverRecv, rxChain, rxNewRecv, rxReorganise};
 static RxState currRxState = RX_DISCOVER_SEND;
 
+// Tx state machine functions
 static TxState txIdle(HysObj);
 static TxState txRead(HysObj);
 static TxState txConvert(HysObj);
@@ -110,6 +112,7 @@ static TxState txTransmit(HysObj);
 static TxState (*txStates[])(HysObj) = {txIdle, txRead, txConvert, txTransmit};
 static TxState currTxState = TX_IDLE;
 
+// Prop state machine functions
 static PropState propIdle(Block newBlock);
 static PropState propSend(Block newBlock);
 
@@ -138,7 +141,7 @@ static bool startNode = false;
 static bool displayAvailable = false;
 
 static uint8_t myID;
-static uint32_t sigKey = 0;
+static uint32_t sigKey = 0; // secret key used for signing messages
 static uint32_t activePeers[UINT8_MAX] = {0};
 
 static Block blockchain[BLOCKCHAIN_SIZE] = {0};
@@ -149,10 +152,10 @@ static uint16_t longestChainHeight = 0;
 static bool discoverySuccess = false;
 static uint8_t chainPartnerID = 0;
 
-static uint8_t partialBlock[sizeof(Block)];
+static uint8_t partialBlock[sizeof(Block)]; // buffer to reuse for receiving blocks
 static uint8_t partialBlockPos = 0;
 
-static Block newBlock = {0};
+static Block newBlock = {0}; // buffer to reuse for sending new blocks
 static uint8_t newBlockSenderID = 0;
 static uint8_t condensedPeers[UINT8_MAX] = {0};
 static uint8_t condensedPeersLen = 0;
@@ -168,16 +171,19 @@ static void readParams()
   {
     startNode = true;
   }
+  // this parameter indicates whether this node has a display available in slot 3
   if (params[2])
   {
     displayAvailable = true;
   }
 
+  // this saves the last 4 bytes as the secret signature key 
   sigKey = *(uint32_t *)(&params[3]);
 }
 
 static void updateTxBuf(MsgType type, uint8_t senderID, uint8_t receiverID, uint8_t header, uint8_t dataLength, uint8_t *data)
 {
+  // set the Tx buffer fields and update through the CAN driver
   txBufs[type].bufIndex = type;
   txBufs[type].id[ID_MSG_TYPE_Pos] = type;
   txBufs[type].id[ID_SENDER_Pos] = senderID;
@@ -197,6 +203,7 @@ static void updateTxBuf(MsgType type, uint8_t senderID, uint8_t receiverID, uint
 
 static void updateFilter(MsgType msgType, uint8_t senderID, uint8_t receiverID, uint8_t header, FilterConfig config)
 {
+  // set the filter fields and update through the CAN driver
   filters[msgType].filterIndex = msgType;
   filters[msgType].id[ID_MSG_TYPE_Pos] = msgType;
   filters[msgType].id[ID_SENDER_Pos] = senderID;
@@ -326,7 +333,7 @@ static void sendBlocks(uint16_t height, uint8_t *blockBytes, HeaderType header, 
   CANSend(MSG_BLOCK);
 }
 
-static void   sendNewestBlock(uint8_t senderID)
+static void sendNewestBlock(uint8_t senderID)
 {
   // build new block
   newBlock = blockchain[height - 1];
@@ -482,6 +489,7 @@ static RxState rxDiscoverRecv(bool hasMessage, MsgType type, uint8_t senderID, u
       data[1] = ((uint8_t *)&height)[0];
       data[2] = ((uint8_t *)&height)[1];
 
+      // send a response with discovery data
       updateFilter(MSG_CHAIN, BROADCAST_ID, myID, HDR_NONE, STF0M);
       updateTxBuf(MSG_DISCOVER, BROADCAST_ID, rxBuf[0], HDR_CHAIN, sizeof(data), data);
       CANSend(MSG_DISCOVER);
@@ -562,6 +570,7 @@ static RxState rxChain(bool hasMessage, MsgType type, uint8_t senderID, uint8_t 
     {
       dbg_write_str("Received partial chain block\n");
 
+      // length of data is 0 means done receiving
       if (len == 0)
       {
         dbg_write_str("Completed discovery\n");
@@ -571,6 +580,7 @@ static RxState rxChain(bool hasMessage, MsgType type, uint8_t senderID, uint8_t 
         resetChainState();
         discoverySuccess = true;
       }
+      // store incoming block bytes otherwise
       else
       {
         BlockError storageResult = storePartialBlock(rxBuf, len, height);
@@ -643,6 +653,7 @@ static RxState rxNewRecv(bool hasMessage, MsgType type, uint8_t senderID, uint8_
   {
     count = 0;
 
+    // received a message to indicate a new block is coming.. prep a filter
     if (type == MSG_NEW && header == HDR_NONE)
     {
       dbg_write_str("Ready to begin receiving new block\n");
@@ -650,11 +661,13 @@ static RxState rxNewRecv(bool hasMessage, MsgType type, uint8_t senderID, uint8_
       dbg_write_char('\n');
       updateFilter(MSG_BLOCK, rxBuf[0], myID, HDR_NEW, STF0M);
     }
+    // receive partial block data
     else if (type == MSG_BLOCK && header == HDR_NEW && len > 0)
     {
       dbg_write_str("Received partial new block\n");
       BlockError storageResult = storePartialBlock(rxBuf, len, height);
 
+      // update height if block is valid
       if (storageResult == BLOCK_ERR_VALID)
       {
         height++;
@@ -698,6 +711,7 @@ static RxState rxReorganise(bool hasMessage, MsgType type, uint8_t senderID, uin
   {
     count = 0;
 
+    // received a request from a node reorganising their chain, send the blocks they ask for
     if (type == MSG_REORGANISE && header == HDR_NONE)
     {
       uint16_t startingHeight = *(uint16_t *)rxBuf;
@@ -706,12 +720,14 @@ static RxState rxReorganise(bool hasMessage, MsgType type, uint8_t senderID, uin
     }
     else if (type == MSG_BLOCK && header == HDR_REORGANISE)
     {
+      // data length 0 means done receiving
       if (len == 0)
       {
         discoverySuccess = true;
         resetFilters();
         nextState = RX_ENTRY;
       }
+      // store partial block bytes otherwise
       else
       {
         BlockError storageResult = storePartialBlock(rxBuf, len, height);
@@ -846,12 +862,14 @@ static TxState txIdle(HysObj sw0)
 
   count++;
 
+  // blink once count reaches the blink rate
   if (count * PROCESS_SM_RATE >= BLINK_RATE)
   {
     PORT_REGS->GROUP[0].PORT_OUTTGL = PORT_PA14;
     count = 0;
   }
 
+  // if reading a button input, transition to next state to process input
   if (sw0.pendingInput)
   {
     nextState = TX_READ;
@@ -864,28 +882,34 @@ static TxState txIdle(HysObj sw0)
 static TxState txRead(HysObj sw0)
 {
   TxState nextState = TX_READ;
+
+  // specific state counts for certain timeouts
   static volatile int msgCount = 0;
   static volatile int letterCount = 0;
 
   msgCount++;
   letterCount++;
 
+  // check for timeout on entire message being inputted, transition to timeout if reached
   if (msgCount * SW0_SAMPLE_RATE >= MSG_TIMEOUT || txBufPos >= TRANSACTION_MSG_SIZE)
   {
     msgCount = 0;
     nextState = TX_TRANSMIT;
   }
+  // check for timeout on individual english character being inputted, transition to convert if reached
   else if (letterCount * SW0_SAMPLE_RATE >= LETTER_TIMEOUT || currBinPos >= MORSE_MAX_LEN)
   {
     letterCount = 0;
-    currBin[currBinPos] = '\0';
+    currBin[currBinPos] = '\0'; // null terminate string before processing
     currBinPos = 0;
     nextState = TX_CONVERT;
   }
+  // deactivate LED
   else if (!sw0.pendingInput && !sw0.event)
   {
     PORT_REGS->GROUP[0].PORT_OUTSET = PORT_PA14;
   }
+  // activate LED and convert button event to binary character
   else
   {
     PORT_REGS->GROUP[0].PORT_OUTCLR = PORT_PA14;
@@ -913,8 +937,9 @@ static TxState txConvert(HysObj sw0)
 {
   TxState nextState = TX_READ;
 
-  char conversion = binToChar(currBin);
+  char conversion = binToChar(currBin); // convert binary string to english char
 
+  // if conversion is not empty, add to message string
   if (conversion != '\0')
   {
     txBuf[txBufPos] = conversion;
@@ -933,7 +958,7 @@ static TxState txTransmit(HysObj sw0)
   // wait for pending operations
   if (!newBlockSenderID)
   {
-    // create new transaction and block block
+    // create new transaction and sign it
     Transaction newTransaction = {.srcID = myID, .msgLen = txBufPos};
     for (int i = 0; i < txBufPos; i++)
     {
@@ -943,10 +968,12 @@ static TxState txTransmit(HysObj sw0)
 
     blockchain[height].minerID = myID;
 
+    // 'mine'
     blockchain[height].nonce = trngRandom(0);
     while (!verifyNonce(blockchain[height].nonce))
       blockchain[height].nonce = trngRandom(0);
 
+    // hash prev block
     blockchain[height].height = height;
     blockchain[height].transaction = newTransaction;
     icmSHA256((uint8_t *)&blockchain[height - 1], sizeof(Block), blockchain[height].prevHash);
@@ -998,6 +1025,7 @@ static PropState propSend(Block newBlock)
 
   count++;
 
+  // transition to idle if we've propagated to enough peers, or no more peers to send to
   if (count >= PEER_PROPAGATION_COUNT || !newBlockSenderID || condensedPeersLen == 0)
   {
     count = 0;
@@ -1117,7 +1145,7 @@ static void startup()
 {
   readParams();
 
-  // start node initializes blockchain on startup, all others do consensus on startup
+  // start node initializes blockchain on startup, all others do discovery on startup
   if (startNode)
   {
     chainPartnerID = 0;
@@ -1142,6 +1170,7 @@ static void startup()
     discoverySuccess = false;
   }
 
+  // run all inits
   sw0Init();
   icmInit();
   CANInit(rxFifo0Start, rxFifo1Start, txBufStart, extendedFilterStart, RX_FIFO_ELEMENT_COUNT, RX_FIFO_ELEMENT_COUNT, TX_BUF_ELEMENT_COUNT, EXTENDED_FILTER_COUNT, canCallback);
@@ -1161,6 +1190,7 @@ static void startup()
   PORT_REGS->GROUP[0].PORT_DIRSET = PORT_PA14;
   PORT_REGS->GROUP[0].PORT_OUTSET = PORT_PA14;
 
+  // set initial Rx state depending on the type of node
   if (!startNode)
   {
     currRxState = RX_DISCOVER_SEND;
@@ -1222,6 +1252,7 @@ int main()
     {
       processRxState();
 
+      // only process user input and propagation if we have a good chain
       if (discoverySuccess)
       {
         processTxState(sw0);

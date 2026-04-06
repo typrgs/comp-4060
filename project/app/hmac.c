@@ -12,6 +12,7 @@ void HMACSign(uint8_t *msg, uint64_t msgLen, uint8_t *key, uint8_t keyLen, uint8
   uint8_t outerMsg[SHA256_BLOCK_SIZE + SHA256_DIGEST_SIZE];
   uint8_t innerHash[HMAC_SIZE] = {0};
 
+  // This signing process follows the definition of HMAC in RFC 2104 using SHA256 through the ICM unit
   if (keyLen > SHA256_BLOCK_SIZE)
   {
     icmSHA256(key, keyLen, &outerKey[HMAC_SIZE]);
@@ -65,6 +66,7 @@ bool HMACVerify(uint8_t *msg, uint64_t msgLen, uint8_t *key, uint8_t keyLen, uin
   uint8_t signResult[HMAC_SIZE];
   HMACSign(msg, msgLen, key, keyLen, signResult);
 
+  // basically does canonical verification to check hashes
   for (uint8_t i = 0; i < HMAC_SIZE && verifyResult; i++)
   {
     if (signature[i] != signResult[i])
