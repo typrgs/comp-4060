@@ -3,8 +3,8 @@
 #include "common.h"
 
 #define BLOCKCHAIN_SIZE UINT8_MAX * 2
-#define BLOCK_MAX_HASH_SIZE 32 // bytes
-#define TRANSACTION_MSG_SIZE 20 // bytes
+#define BLOCK_MAX_HASH_SIZE 32      // bytes
+#define TRANSACTION_MSG_SIZE 20     // bytes
 #define TRANSACTION_MAX_SIG_SIZE 32 // bytes
 
 #define GENESIS_MSG "HELLOWORLD"

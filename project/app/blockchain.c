@@ -149,11 +149,11 @@ BlockError verifyBlock(Block *blockchain, uint16_t height, uint8_t *key, uint8_t
     {
       // hash current top block for use in comparison
       uint8_t prevHash[BLOCK_MAX_HASH_SIZE] = {0};
-  
+
       // msg length is sizeof(Block) * 2 because the length of a hex string needed to represent the size is twice the total amount of bytes
       // (each byte is represented by 8 bits = 2 hex digits)
       hash((uint8_t *)&(blockchain[height - 1]), sizeof(Block), prevHash);
-  
+
       for (int i = 0; i < BLOCK_MAX_HASH_SIZE && result != BLOCK_ERR_HASH; i++)
       {
         if (toVerify.prevHash[i] != prevHash[i])

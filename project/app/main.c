@@ -313,7 +313,7 @@ static void sendBlocks(uint16_t height, uint8_t *blockBytes, HeaderType header, 
     CANSend(MSG_BLOCK);
 
     bytesPos += bytesSent;
-    
+
     // add small delay to prevent message loss while sending many blocks in a row
     uint32_t now = elapsedMS();
     while (elapsedMS() - now < BLOCK_SEND_DELAY)
@@ -326,7 +326,7 @@ static void sendBlocks(uint16_t height, uint8_t *blockBytes, HeaderType header, 
   CANSend(MSG_BLOCK);
 }
 
-static void sendNewestBlock(uint8_t senderID)
+static void   sendNewestBlock(uint8_t senderID)
 {
   // build new block
   newBlock = blockchain[height - 1];
@@ -702,10 +702,11 @@ static RxState rxReorganise(bool hasMessage, MsgType type, uint8_t senderID, uin
     {
       uint16_t startingHeight = *(uint16_t *)rxBuf;
       sendBlocks(height - startingHeight, (uint8_t *)&blockchain[startingHeight], HDR_REORGANISE, myID, senderID);
+      nextState = RX_ENTRY;
     }
     else if (type == MSG_BLOCK && header == HDR_REORGANISE)
     {
-      if(len == 0)
+      if (len == 0)
       {
         discoverySuccess = true;
         resetFilters();
@@ -714,7 +715,7 @@ static RxState rxReorganise(bool hasMessage, MsgType type, uint8_t senderID, uin
       else
       {
         BlockError storageResult = storePartialBlock(rxBuf, len, height);
-  
+
         if (storageResult == BLOCK_ERR_VALID)
         {
           height++;
@@ -1197,15 +1198,25 @@ int main()
   {
     uint32_t msCount = elapsedMS();
 
-    if (displayAvailable && msCount >= displayTimestamp)
-    {
-      updateDisplay(BLUE);
-      displayTimestamp = msCount + DISPLAY_REFRESH_RATE;
-    }
     if (msCount >= sw0SampleTimestamp)
     {
       sampleButton();
       sw0SampleTimestamp = msCount + SW0_SAMPLE_RATE;
+    }
+    if (msCount >= pulseTimestamp)
+    {
+      CANSend(MSG_PULSE);
+      pulseTimestamp = msCount + PULSE_RATE;
+    }
+    if (msCount >= peerCheckTimestamp)
+    {
+      peerCheck(activePeers);
+      peerCheckTimestamp = msCount + PEER_CHECK_RATE;
+    }
+    if (displayAvailable && msCount >= displayTimestamp)
+    {
+      updateDisplay(BLUE);
+      displayTimestamp = msCount + DISPLAY_REFRESH_RATE;
     }
     if (msCount >= processSmTimestamp)
     {
@@ -1218,16 +1229,6 @@ int main()
       }
 
       processSmTimestamp = msCount + PROCESS_SM_RATE;
-    }
-    if (msCount >= pulseTimestamp)
-    {
-      CANSend(MSG_PULSE);
-      pulseTimestamp = msCount + PULSE_RATE;
-    }
-    if (msCount >= peerCheckTimestamp)
-    {
-      peerCheck(activePeers);
-      peerCheckTimestamp = msCount + PEER_CHECK_RATE;
     }
   }
 

@@ -3,7 +3,7 @@
 static icm_descriptor_registers_t transferDesc0 __ALIGNED(64) = {0};
 static icm_descriptor_registers_t transferDesc1 __ALIGNED(64) = {0};
 static uint8_t digest[SHA256_DIGEST_SIZE] __ALIGNED(128); // hash area is 32 bytes to hold a SHA256 digest
-static uint8_t hashData[SHA256_BLOCK_SIZE * 2];              // data to hash needs to be padded so it is 512 bits long
+static uint8_t hashData[SHA256_BLOCK_SIZE * 2];           // data to hash needs to be padded so it is 512 bits long
 
 void icmInit()
 {
@@ -36,13 +36,13 @@ static void padMsg(uint8_t *msg, uint64_t msgLen)
   uint8_t dataPos = 0;
 
   // reset hash data regions
-  for (uint8_t i=0; i<SHA256_BLOCK_SIZE * 2; i++)
+  for (uint8_t i = 0; i < SHA256_BLOCK_SIZE * 2; i++)
   {
     hashData[i] = 0;
   }
 
   // copy message to hash data areas
-  for(uint8_t i=0; i<msgLen; i++)
+  for (uint8_t i = 0; i < msgLen; i++)
   {
     hashData[i] = msg[i];
   }
@@ -56,7 +56,7 @@ static void padMsg(uint8_t *msg, uint64_t msgLen)
 
   // determine where to put the last 8 bytes in the data array
   // set transfer descriptors accordingly
-  if(dataPos <= SHA256_BLOCK_SIZE - 8)
+  if (dataPos <= SHA256_BLOCK_SIZE - 8)
   {
     transferDesc0.ICM_RNEXT = 0;
     transferDesc0.ICM_RCFG |= ICM_RCFG_EOM_Msk;

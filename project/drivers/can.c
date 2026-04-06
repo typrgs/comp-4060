@@ -96,14 +96,6 @@ void CANInit(uint32_t *rxFifo0Start, uint32_t *rxFifo1Start, uint32_t *txBufStar
   // configure Tx Buffer element size
   CAN1_REGS->CAN_TXESC = CAN_TXESC_TBDS_DATA8;
 
-#ifndef NDEBUG
-  // SET TEST MODE
-  // CAN1_REGS->CAN_CCCR |= CAN_CCCR_TEST_Msk;
-
-  // SET EXTERNAL LOOPBACK
-  // CAN1_REGS->CAN_TEST = CAN_TEST_LBCK_Msk;
-#endif
-
   CAN1_REGS->CAN_CCCR &= ~CAN_CCCR_INIT_Msk;
   while ((CAN1_REGS->CAN_CCCR & CAN_CCCR_INIT_Msk) != 0)
     ;

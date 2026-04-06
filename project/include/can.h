@@ -7,7 +7,7 @@
 
 #define EXTENDED_FILTER_WORDS 2 // 32-bit words
 #define RX_FIFO_ELEMENT_WORDS 4 // 32-bit words
-#define TX_BUF_ELEMENT_WORDS 4 // 32-bit words
+#define TX_BUF_ELEMENT_WORDS 4  // 32-bit words
 
 #define CAN_MESSAGE_SIZE 8 // bytes
 
